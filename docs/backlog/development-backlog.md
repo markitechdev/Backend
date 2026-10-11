@@ -244,3 +244,22 @@
   - Primary SKU column is sticky-pinned on mobile data tables.
   - Consistent padding and input heights applied across forms.
 - **QA Required:** Yes
+---
+
+### Backlog Item 6: Separate Super Admin Authentication Flow & Endpoints
+- **Task:** Isolate Super Admin Authentication, Session Validation, and Route Protection
+- **Source:** Architectural Security Enhancement & QA Guidelines
+- **Repository:** Backend
+- **Priority:** P0
+- **Owner:** Main Backend Developer
+- **Status:** FOR QA
+- **Dependencies:** None
+- **Acceptance Criteria:**
+  - Dedicated endpoint `POST /api/super-admin/auth/login` authenticates only accounts holding the verified `super_admin` role.
+  - Non-super-admins attempting to use Super Admin login are denied with safe authentication failure (HTTP 401).
+  - Super Admin accounts attempting to authenticate through normal login (`POST /api/auth/login`) are denied with HTTP 401.
+  - Dedicated middleware `authenticateSuperAdmin` authoritatively enforces Super Admin role from database state on all `api/super-admin/*` routes.
+  - Normal users (Admin, Manager, Staff) receive HTTP 403 Forbidden on Super Admin platform endpoints.
+  - Super Admin logout revokes tokens in memory blacklist and invalidates cached user profiles.
+  - Automated tests verify all 12+ authentication and authorization test scenarios.
+- **QA Required:** Yes
