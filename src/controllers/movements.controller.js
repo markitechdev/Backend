@@ -4,7 +4,17 @@ import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok, created } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
+import { refreshAlertsForProduct } from '../services/alert.service.js';
 import { invalidateDashboardCache } from '../utils/cache.js';
+
+const MOVEMENT_AUDIT_ACTIONS = {
+  stock_in: 'STOCK_IN',
+  stock_out: 'STOCK_OUT',
+  damaged: 'ITEM_DAMAGED',
+  missing: 'ITEM_MISSING',
+  returned: 'STOCK_RETURNED',
+  adjustment: 'STOCK_ADJUSTMENT',
+};
 
 const SELECT = `
   movement_id, movement_type, quantity, reason, reference_no, date_recorded,
@@ -58,8 +68,22 @@ export const createMovement = asyncHandler(async (req, res) => {
     .from('inventory').select('current_stock').eq('product_id', productId).single();
   if (!invCheck) throw ApiError.badRequest('This product has no inventory record yet.');
 
-  if (['stock_out', 'damaged', 'missing'].includes(movementType) && invCheck.current_stock < quantity) {
-    throw ApiError.badRequest(`Insufficient stock on hand (current: ${invCheck.current_stock}, requested: ${quantity})`);
+  const currentStock = invCheck.current_stock;
+  let projectedStock = currentStock;
+
+  if (['stock_out', 'damaged', 'missing'].includes(movementType)) {
+    projectedStock = currentStock - quantity;
+  } else if (movementType === 'stock_in' || movementType === 'returned') {
+    projectedStock = currentStock + quantity;
+  } else if (movementType === 'adjustment') {
+    projectedStock = currentStock + quantity;
+  }
+
+  // Authoritative guard against negative inventory
+  if (projectedStock < 0) {
+    throw ApiError.badRequest(
+      `Insufficient stock on hand: current stock is ${currentStock}, operation would result in negative stock (${projectedStock})`
+    );
   }
 
   const { data, error } = await supabaseAdmin.from('stock_movements').insert({
@@ -72,7 +96,7 @@ export const createMovement = asyncHandler(async (req, res) => {
   }).select(SELECT).single();
 
   if (error) {
-    // The trigger raises this when a movement would push stock below zero.
+    // The database trigger raises this when a movement would push stock below zero
     if (/Insufficient stock/i.test(error.message)) throw ApiError.badRequest(error.message);
     if (/No inventory record/i.test(error.message)) {
       throw ApiError.badRequest('This product has no inventory record yet.');
@@ -84,12 +108,27 @@ export const createMovement = asyncHandler(async (req, res) => {
     .from('inventory').select('current_stock, minimum_stock, reorder_point')
     .eq('product_id', productId).single();
 
-  await logActivity(req.user.id, 'record_movement', 'stock_movements', data.movement_id, {
-    product: product.product_name, movementType, quantity,
+  // Trigger alert refresh to keep lifecycle and notifications in sync
+  await refreshAlertsForProduct(productId);
+
+  const auditAction = MOVEMENT_AUDIT_ACTIONS[movementType] || 'RECORD_MOVEMENT';
+  await logActivity(req.user.id, auditAction, 'stock_movements', data.movement_id, {
+    product: product.product_name,
+    movementType,
+    quantity,
+    stockBefore: currentStock,
+    stockAfter: inv?.current_stock ?? projectedStock,
+    reason: reason ?? null,
+    referenceNo: referenceNo ?? null,
   });
 
   invalidateDashboardCache(req.tenantId);
-  created(res, { ...data, inventory: inv });
+  created(res, {
+    ...data,
+    stockBefore: currentStock,
+    stockAfter: inv?.current_stock ?? projectedStock,
+    inventory: inv,
+  });
 });
 
 /** GET /api/movements/summary - totals by type, for the shrinkage report. */
