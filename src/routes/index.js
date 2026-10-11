@@ -1,4 +1,4 @@
-﻿import { Router } from 'express';
+import { Router } from 'express';
 import authRoutes from './auth.routes.js';
 import superAdminRoutes from './superAdmin.routes.js';
 import userRoutes from './users.routes.js';
@@ -11,6 +11,7 @@ import categoryRoutes from './categories.routes.js';
 import supplierRoutes from './suppliers.routes.js';
 import dashboardRoutes from './dashboard.routes.js';
 import logRoutes from './logs.routes.js';
+import reportRoutes from './reports.routes.js';
 
 const router = Router();
 
@@ -34,5 +35,6 @@ router.use('/dashboard', dashboardRoutes);
 router.use('/logs', logRoutes);
 router.use('/categories', categoryRoutes);
 router.use('/suppliers', supplierRoutes);
+router.use('/reports', reportRoutes);
 
 export default router;
