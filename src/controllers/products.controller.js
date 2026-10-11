@@ -5,6 +5,9 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok, created, noContent, paginated } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
 import { refreshAlertsForProduct } from '../services/alert.service.js';
+import { stockStatus, assertThresholds } from '../utils/stock.js';
+import { safeSearchTerm } from '../utils/query.js';
+import { invalidateDashboardCache } from '../utils/cache.js';
 
 const SELECT = `
   product_id, product_name, sku, unit_price, unit_of_measure, expiration_date, status, created_at,
@@ -20,7 +23,9 @@ export const productSchema = z.object({
   supplierId: z.coerce.number().int().positive().optional().nullable(),
   unitPrice: z.coerce.number().min(0).default(0),
   unitOfMeasure: z.string().default('pc'),
-  expirationDate: z.string().optional().nullable(),
+  expirationDate: z.string()
+    .refine((v) => !v || !Number.isNaN(Date.parse(v)), 'Expiration date must be a valid date')
+    .optional().nullable(),
   status: z.enum(['active', 'inactive', 'discontinued']).default('active'),
   // initial inventory, created alongside the product
   currentStock: z.coerce.number().int().min(0).default(0),
@@ -29,23 +34,19 @@ export const productSchema = z.object({
   location: z.string().default('Main Warehouse'),
 });
 
-export const productUpdateSchema = productSchema.partial();
+export const productUpdateSchema = productSchema.partial().omit({ currentStock: true });
 
 /** Adds a derived stock_status so the UI does not recompute it in three places. */
 const decorate = (row) => {
   const inv = Array.isArray(row.inventory) ? row.inventory[0] : row.inventory;
-  let stockStatus = 'in_stock';
-  if (inv) {
-    if (inv.current_stock === 0) stockStatus = 'out_of_stock';
-    else if (inv.current_stock <= inv.minimum_stock) stockStatus = 'low_stock';
-    else if (inv.current_stock <= inv.reorder_point) stockStatus = 'reorder';
-  }
-  return { ...row, inventory: inv ?? null, stock_status: stockStatus };
+  const status = inv ? stockStatus(inv.current_stock, inv.minimum_stock, inv.reorder_point) : 'in_stock';
+  return { ...row, inventory: inv ?? null, stock_status: status };
 };
 
 /** GET /api/products */
 export const listProducts = asyncHandler(async (req, res) => {
-  const { search, categoryId, supplierId, status, stockStatus } = req.query;
+  const { categoryId, supplierId, status, stockStatus: wantedStockStatus } = req.query;
+  const search = safeSearchTerm(req.query.search);
 
   let q = supabaseAdmin.from('products').select(SELECT).order('product_name');
   if (categoryId) q = q.eq('category_id', categoryId);
@@ -57,7 +58,7 @@ export const listProducts = asyncHandler(async (req, res) => {
   if (error) throw new ApiError(500, error.message);
 
   let rows = data.map(decorate);
-  if (stockStatus) rows = rows.filter((r) => r.stock_status === stockStatus);
+  if (wantedStockStatus) rows = rows.filter((r) => r.stock_status === wantedStockStatus);
 
   const { page, limit } = req.query;
   if (page || limit) {
@@ -91,6 +92,7 @@ export const getProduct = asyncHandler(async (req, res) => {
 /** POST /api/products - creates the product and its inventory row together. */
 export const createProduct = asyncHandler(async (req, res) => {
   const b = req.body;
+  assertThresholds(b.minimumStock, b.reorderPoint);
 
   const { data: product, error } = await supabaseAdmin.from('products').insert({
     product_name: b.productName,
@@ -126,6 +128,7 @@ export const createProduct = asyncHandler(async (req, res) => {
   // trg_apply_stock_movement trigger would then add the quantity a second time.
   // Every change after this point must go through /api/movements.
 
+  invalidateDashboardCache();
   await logActivity(req.user.id, 'PRODUCT_CREATED', 'products', product.product_id, { sku: b.sku, name: product.product_name });
   const { data: full } = await supabaseAdmin
     .from('products').select(SELECT).eq('product_id', product.product_id).single();
@@ -150,6 +153,12 @@ export const updateProduct = asyncHandler(async (req, res) => {
     .from('products').select('product_id, product_name').eq('product_id', req.params.id).single();
   if (!existing) throw ApiError.notFound('Product not found');
 
+  if (b.minimumStock !== undefined || b.reorderPoint !== undefined) {
+    const { data: inv } = await supabaseAdmin
+      .from('inventory').select('minimum_stock, reorder_point').eq('product_id', req.params.id).maybeSingle();
+    assertThresholds(b.minimumStock ?? inv?.minimum_stock ?? 0, b.reorderPoint ?? inv?.reorder_point ?? 0);
+  }
+
   if (Object.keys(productPatch).length) {
     const { error } = await supabaseAdmin
       .from('products').update(productPatch).eq('product_id', req.params.id);
@@ -168,10 +177,12 @@ export const updateProduct = asyncHandler(async (req, res) => {
   if (Object.keys(invPatch).length) {
     invPatch.updated_by = req.user.id;
     invPatch.last_updated = new Date().toISOString();
-    await supabaseAdmin.from('inventory').update(invPatch).eq('product_id', req.params.id);
+    const { error: invError } = await supabaseAdmin.from('inventory').update(invPatch).eq('product_id', req.params.id);
+    if (invError) throw new ApiError(500, invError.message);
   }
 
   await refreshAlertsForProduct(Number(req.params.id));
+  invalidateDashboardCache();
   await logActivity(req.user.id, 'PRODUCT_UPDATED', 'products', req.params.id, { ...productPatch, ...invPatch });
 
   const { data: full } = await supabaseAdmin
@@ -180,14 +191,40 @@ export const updateProduct = asyncHandler(async (req, res) => {
   ok(res, decorate(full));
 });
 
-/** DELETE /api/products/:id */
+/**
+ * DELETE /api/products/:id
+ * A product with stock movement history is ARCHIVED (status = discontinued)
+ * instead of deleted: deleting it would cascade-delete its movement ledger and
+ * erase the shrinkage history this system exists to keep.
+ */
 export const deleteProduct = asyncHandler(async (req, res) => {
   const { data: existing } = await supabaseAdmin
-    .from('products').select('product_id, product_name').eq('product_id', req.params.id).single();
+    .from('products').select('product_id, product_name, status').eq('product_id', req.params.id).maybeSingle();
   if (!existing) throw ApiError.notFound('Product not found');
+
+  const { count: movementCount, error: countError } = await supabaseAdmin
+    .from('stock_movements').select('movement_id', { count: 'exact', head: true })
+    .eq('product_id', req.params.id);
+  if (countError) throw new ApiError(500, countError.message);
+
+  if ((movementCount ?? 0) > 0) {
+    const { error } = await supabaseAdmin
+      .from('products').update({ status: 'discontinued' }).eq('product_id', req.params.id);
+    if (error) throw new ApiError(500, error.message);
+    invalidateDashboardCache();
+    await logActivity(req.user.id, 'PRODUCT_ARCHIVED', 'products', req.params.id, {
+      name: existing.product_name, movementCount,
+    });
+    return ok(res, {
+      archived: true,
+      productId: existing.product_id,
+      message: `"${existing.product_name}" has ${movementCount} stock movement(s), so it was archived (discontinued) instead of deleted to keep its audit history.`,
+    });
+  }
 
   const { error } = await supabaseAdmin.from('products').delete().eq('product_id', req.params.id);
   if (error) throw new ApiError(500, error.message);
+  invalidateDashboardCache();
   await logActivity(req.user.id, 'PRODUCT_DELETED', 'products', req.params.id, { name: existing.product_name });
   noContent(res);
 });

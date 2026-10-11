@@ -13,5 +13,6 @@ router.use(enforceTenantIsolation);
 router.get('/',        requirePermission('movements.view'),   c.listMovements);
 router.get('/summary', requirePermission('movements.view'),   c.movementSummary);
 router.post('/',       requirePermission('movements.create'), preventDuplicateAction(), validateBody(c.movementSchema), c.createMovement);
+router.post('/count',  requirePermission('movements.create'), preventDuplicateAction(), validateBody(c.stockCountSchema), c.recordStockCount);
 
 export default router;

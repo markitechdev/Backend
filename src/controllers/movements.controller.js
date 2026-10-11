@@ -6,6 +6,7 @@ import { ok, created } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
 import { refreshAlertsForProduct } from '../services/alert.service.js';
 import { invalidateDashboardCache } from '../utils/cache.js';
+import { applyDateRange } from '../utils/query.js';
 
 const MOVEMENT_AUDIT_ACTIONS = {
   stock_in: 'STOCK_IN',
@@ -41,10 +42,9 @@ export const listMovements = asyncHandler(async (req, res) => {
     .order('date_recorded', { ascending: false })
     .limit(Math.min(Number(limit) || 100, 500));
 
-  if (productId) q = q.eq('product_id', productId);
+  if (productId) q = q.eq('product_id', Number(productId) || 0);
   if (type)      q = q.eq('movement_type', type);
-  if (from)      q = q.gte('date_recorded', from);
-  if (to)        q = q.lte('date_recorded', to);
+  q = applyDateRange(q, 'date_recorded', from, to);
 
   const { data, error } = await q;
   if (error) throw new ApiError(500, error.message);
@@ -137,8 +137,7 @@ export const movementSummary = asyncHandler(async (req, res) => {
 
   let q = supabaseAdmin.from('stock_movements')
     .select('movement_type, quantity, product:products ( unit_price )');
-  if (from) q = q.gte('date_recorded', from);
-  if (to)   q = q.lte('date_recorded', to);
+  q = applyDateRange(q, 'date_recorded', from, to);
 
   const { data, error } = await q;
   if (error) throw new ApiError(500, error.message);
@@ -161,5 +160,76 @@ export const movementSummary = asyncHandler(async (req, res) => {
     byType,
     shrinkage: { units: shrinkageUnits, value: Number(shrinkageValue.toFixed(2)) },
     totalMovements: data.length,
+  });
+});
+
+export const stockCountSchema = z.object({
+  productId: z.coerce.number().int().positive(),
+  countedQuantity: z.coerce.number().int().min(0, 'Counted quantity cannot be negative'),
+  reason: z.string().max(500).optional().nullable(),
+  referenceNo: z.string().max(100).optional().nullable(),
+});
+
+/**
+ * POST /api/movements/count - physical (cycle) count.
+ * Staff enter what is physically on the shelf; the server compares it with the
+ * system quantity and records the variance in the ledger:
+ *   counted < system  -> "missing" movement (shrinkage, raises a missing-item alert)
+ *   counted > system  -> positive "adjustment"
+ *   counted = system  -> nothing recorded, the count is only logged
+ * This is what lets shrinkage be detected instead of only being self-reported.
+ */
+export const recordStockCount = asyncHandler(async (req, res) => {
+  const { productId, countedQuantity, reason, referenceNo } = req.body;
+
+  const { data: product } = await supabaseAdmin
+    .from('products').select('product_id, product_name').eq('product_id', productId).maybeSingle();
+  if (!product) throw ApiError.notFound('Product not found');
+
+  const { data: inv } = await supabaseAdmin
+    .from('inventory').select('current_stock').eq('product_id', productId).maybeSingle();
+  if (!inv) throw ApiError.badRequest('This product has no inventory record yet.');
+
+  const systemQuantity = inv.current_stock;
+  const variance = countedQuantity - systemQuantity;
+
+  if (variance === 0) {
+    await logActivity(req.user.id, 'STOCK_COUNT_MATCHED', 'inventory', productId, {
+      product: product.product_name, counted: countedQuantity, system: systemQuantity,
+    });
+    return ok(res, { variance: 0, systemQuantity, countedQuantity, movement: null,
+      message: 'Physical count matches the system quantity. No adjustment needed.' });
+  }
+
+  const movementType = variance < 0 ? 'missing' : 'adjustment';
+  const note = `Cycle count: counted ${countedQuantity}, system had ${systemQuantity}`;
+
+  const { data, error } = await supabaseAdmin.from('stock_movements').insert({
+    product_id: productId,
+    movement_type: movementType,
+    quantity: Math.abs(variance),
+    reason: reason ? `${note}. ${reason}` : note,
+    reference_no: referenceNo ?? null,
+    recorded_by: req.user.id,
+  }).select(SELECT).single();
+
+  if (error) {
+    if (/Insufficient stock/i.test(error.message)) {
+      throw ApiError.conflict('Stock changed while the count was being saved. Please count again.');
+    }
+    throw new ApiError(500, error.message);
+  }
+
+  await refreshAlertsForProduct(productId);
+  await logActivity(req.user.id, 'STOCK_COUNT_VARIANCE', 'stock_movements', data.movement_id, {
+    product: product.product_name, counted: countedQuantity, system: systemQuantity, variance, movementType,
+  });
+  invalidateDashboardCache(req.tenantId);
+
+  created(res, {
+    variance, systemQuantity, countedQuantity, movement: data,
+    message: variance < 0
+      ? `${Math.abs(variance)} unit(s) missing. Recorded as shrinkage.`
+      : `${variance} unit(s) more than the system showed. Recorded as an adjustment.`,
   });
 });

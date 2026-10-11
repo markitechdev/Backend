@@ -5,23 +5,20 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
 import { refreshAlertsForProduct, refreshAllAlerts } from '../services/alert.service.js';
+import { statusOfRow, assertThresholds } from '../utils/stock.js';
+import { invalidateDashboardCache } from '../utils/cache.js';
 
 const SELECT = `
   inventory_id, current_stock, minimum_stock, reorder_point, location, last_updated,
   product:products (
-    product_id, product_name, sku, unit_price, status, expiration_date,
+    product_id, product_name, sku, unit_price, unit_of_measure, status, expiration_date,
     category:categories ( category_id, category_name ),
     supplier:suppliers ( supplier_id, supplier_name )
   ),
   updated_by_user:users!inventory_updated_by_fkey ( full_name )
 `;
 
-const statusOf = (r) => {
-  if (r.current_stock === 0) return 'out_of_stock';
-  if (r.current_stock <= r.minimum_stock) return 'low_stock';
-  if (r.current_stock <= r.reorder_point) return 'reorder';
-  return 'in_stock';
-};
+const statusOf = statusOfRow;
 
 /** GET /api/inventory - the stock monitoring list. */
 export const listInventory = asyncHandler(async (req, res) => {
@@ -82,6 +79,14 @@ export const thresholdSchema = z.object({
 
 /** PATCH /api/inventory/:productId - edit thresholds only, never the stock count. */
 export const updateThresholds = asyncHandler(async (req, res) => {
+  const { data: current } = await supabaseAdmin
+    .from('inventory').select('minimum_stock, reorder_point').eq('product_id', req.params.productId).maybeSingle();
+  if (!current) throw ApiError.notFound('Inventory record not found');
+  assertThresholds(
+    req.body.minimumStock ?? current.minimum_stock,
+    req.body.reorderPoint ?? current.reorder_point,
+  );
+
   const patch = { updated_by: req.user.id, last_updated: new Date().toISOString() };
   if (req.body.minimumStock !== undefined) patch.minimum_stock = req.body.minimumStock;
   if (req.body.reorderPoint !== undefined) patch.reorder_point = req.body.reorderPoint;
@@ -93,6 +98,7 @@ export const updateThresholds = asyncHandler(async (req, res) => {
   if (!data) throw ApiError.notFound('Inventory record not found');
 
   await refreshAlertsForProduct(Number(req.params.productId));
+  invalidateDashboardCache();
   await logActivity(req.user.id, 'update_thresholds', 'inventory', req.params.productId, patch);
   ok(res, { ...data, stock_status: statusOf(data) });
 });
@@ -100,6 +106,7 @@ export const updateThresholds = asyncHandler(async (req, res) => {
 /** POST /api/inventory/recheck-alerts */
 export const recheckAlerts = asyncHandler(async (req, res) => {
   const count = await refreshAllAlerts();
+  invalidateDashboardCache();
   await logActivity(req.user.id, 'recheck_alerts', 'inventory', null, { products: count });
   ok(res, { message: `Re-evaluated alert rules for ${count} product(s).` });
 });
