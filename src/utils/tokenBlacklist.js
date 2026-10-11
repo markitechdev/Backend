@@ -40,3 +40,6 @@ export const isTokenRevoked = (token) => {
   }
   return true;
 };
+
+export const isTokenBlacklisted = isTokenRevoked;
+

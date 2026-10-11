@@ -50,6 +50,16 @@ export const profileCache = new MemoryCache(60 * 1000);
 // 30-second dashboard metrics cache scoped by role and tenant
 export const dashboardCache = new MemoryCache(30 * 1000);
 
+/** Retrieves a cached user profile by user ID */
+export const getCachedUserProfile = (userId) => {
+  return userId ? profileCache.get(`user_${userId}`) : null;
+};
+
+/** Caches a user profile by user ID */
+export const setCachedUserProfile = (userId, profile, ttlMs) => {
+  if (userId) profileCache.set(`user_${userId}`, profile, ttlMs);
+};
+
 /** Invalidates a specific user profile cache */
 export const invalidateUserProfile = (userId) => {
   if (userId) profileCache.delete(`user_${userId}`);
