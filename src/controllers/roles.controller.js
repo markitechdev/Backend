@@ -4,6 +4,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok, created } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
+import { invalidateAllUserProfiles } from '../utils/cache.js';
 
 /** GET /api/roles - roles with their permission codes and user counts. */
 export const listRoles = asyncHandler(async (_req, res) => {
@@ -106,6 +107,7 @@ export const updateRolePermissions = asyncHandler(async (req, res) => {
     if (error) throw new ApiError(500, error.message);
   }
 
+  invalidateAllUserProfiles();
   await logActivity(req.user.id, 'update_role_permissions', 'roles', roleId, { count: permissionIds.length });
   ok(res, { roleId, permissionIds });
 });
@@ -128,6 +130,7 @@ export const deleteRole = asyncHandler(async (req, res) => {
   if (count) throw ApiError.conflict(`${count} user(s) still use this role. Reassign them first.`);
 
   await supabaseAdmin.from('roles').delete().eq('role_id', roleId);
+  invalidateAllUserProfiles();
   await logActivity(req.user.id, 'delete_role', 'roles', roleId);
   ok(res, { message: 'Role deleted' });
 });

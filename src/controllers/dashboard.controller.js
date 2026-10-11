@@ -2,6 +2,7 @@ import { supabaseAdmin } from '../config/supabase.js';
 import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok } from '../utils/respond.js';
+import { dashboardCache } from '../utils/cache.js';
 
 const statusOf = (r) => {
   if (r.current_stock === 0) return 'out_of_stock';
@@ -14,10 +15,18 @@ const statusOf = (r) => {
  * GET /api/dashboard
  * Returns a payload shaped to the caller's role, so each admin area sees the
  * cards its own responsibilities need rather than one generic dashboard.
+ * Caches payload in memory with a 30s TTL scoped by tenant and role.
  */
 export const getDashboard = asyncHandler(async (req, res) => {
   const roleCode = req.user.role.role_code;
   const perms = req.user.permissions;
+  const tenantId = req.tenantId || 'default-org';
+  const cacheKey = `dash_${tenantId}_${roleCode}`;
+
+  const cached = dashboardCache.get(cacheKey);
+  if (cached) {
+    return ok(res, cached);
+  }
 
   const payload = { role: roleCode, generatedAt: new Date().toISOString(), cards: {}, panels: {} };
 
@@ -131,5 +140,6 @@ export const getDashboard = asyncHandler(async (req, res) => {
     };
   }
 
+  dashboardCache.set(cacheKey, payload);
   ok(res, payload);
 });

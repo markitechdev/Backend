@@ -4,6 +4,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok, created, noContent } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
+import { invalidateUserProfile } from '../utils/cache.js';
 
 const SELECT = `
   user_id, full_name, username, email, contact_number, position, is_active, created_at,
@@ -181,6 +182,7 @@ export const updateUser = asyncHandler(async (req, res) => {
   if (error) throw new ApiError(500, error.message);
   if (!data) throw ApiError.notFound('User not found');
 
+  invalidateUserProfile(req.params.id);
   await logActivity(req.user.id, 'update_user', 'users', req.params.id, patch);
   ok(res, serializeUser(data, req.user.role?.role_code));
 });
@@ -204,6 +206,7 @@ export const deleteUser = asyncHandler(async (req, res) => {
   const { error } = await supabaseAdmin.auth.admin.deleteUser(req.params.id);
   if (error) throw new ApiError(500, error.message);
 
+  invalidateUserProfile(req.params.id);
   await logActivity(req.user.id, 'delete_user', 'users', req.params.id);
   noContent(res);
 });
@@ -237,6 +240,7 @@ export const resetPassword = asyncHandler(async (req, res) => {
   });
   if (error) throw ApiError.badRequest(error.message);
 
+  invalidateUserProfile(req.params.id);
   await logActivity(req.user.id, 'reset_password', 'users', req.params.id);
   ok(res, { message: 'Password updated' });
 });

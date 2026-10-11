@@ -2,10 +2,11 @@ import { supabaseAdmin } from '../config/supabase.js';
 import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { isTokenRevoked } from '../utils/tokenBlacklist.js';
+import { profileCache } from '../utils/cache.js';
 
 /**
  * Verifies the Supabase access token, then loads the user's profile,
- * role and flattened permission list onto req.user.
+ * role and flattened permission list onto req.user with memory caching (TTL 60s).
  */
 export const authenticate = asyncHandler(async (req, _res, next) => {
   const header = req.headers.authorization || '';
@@ -18,6 +19,14 @@ export const authenticate = asyncHandler(async (req, _res, next) => {
 
   const { data: authData, error: authError } = await supabaseAdmin.auth.getUser(token);
   if (authError || !authData?.user) throw ApiError.unauthorized('Invalid or expired session');
+
+  const cacheKey = `user_${authData.user.id}`;
+  const cachedUser = profileCache.get(cacheKey);
+  if (cachedUser) {
+    req.user = cachedUser;
+    req.accessToken = token;
+    return next();
+  }
 
   const { data: profile, error: profileError } = await supabaseAdmin
     .from('users')
@@ -42,7 +51,7 @@ export const authenticate = asyncHandler(async (req, _res, next) => {
 
   if (permError) throw new ApiError(500, 'Could not load role permissions');
 
-  req.user = {
+  const userPayload = {
     id: profile.user_id,
     fullName: profile.full_name,
     username: profile.username,
@@ -52,6 +61,9 @@ export const authenticate = asyncHandler(async (req, _res, next) => {
     role: profile.role,
     permissions: (perms || []).map((p) => p.permissions.permission_code),
   };
+
+  profileCache.set(cacheKey, userPayload);
+  req.user = userPayload;
   req.accessToken = token;
   next();
 });

@@ -4,6 +4,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok, created } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
+import { invalidateDashboardCache } from '../utils/cache.js';
 
 const SELECT = `
   movement_id, movement_type, quantity, reason, reference_no, date_recorded,
@@ -87,6 +88,7 @@ export const createMovement = asyncHandler(async (req, res) => {
     product: product.product_name, movementType, quantity,
   });
 
+  invalidateDashboardCache(req.tenantId);
   created(res, { ...data, inventory: inv });
 });
 
