@@ -94,8 +94,11 @@ export const createUser = asyncHandler(async (req, res) => {
   const { fullName, username, email, password, roleId, position, contactNumber } = req.body;
 
   const { data: roleRow } = await supabaseAdmin
-    .from('roles').select('role_id, role_code').eq('role_id', roleId).single();
+    .from('roles').select('role_id, role_code, description').eq('role_id', roleId).single();
   if (!roleRow) throw ApiError.badRequest('That role does not exist');
+  if (roleRow.description?.startsWith('[DEACTIVATED]')) {
+    throw ApiError.badRequest(`Role "${roleRow.role_code}" is currently deactivated and cannot be assigned to users.`);
+  }
 
   const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.createUser({
     email, password, email_confirm: true,
@@ -120,6 +123,11 @@ export const createUser = asyncHandler(async (req, res) => {
   }
 
   await logActivity(req.user.id, 'create_user', 'users', data.user_id, { role: roleRow.role_code });
+  await logActivity(req.user.id, 'ROLE_ASSIGNED', 'roles', roleId, {
+    affectedUserId: data.user_id,
+    roleCode: roleRow.role_code,
+    user: data.full_name,
+  });
   created(res, serializeUser(data, req.user.role?.role_code));
 });
 
@@ -151,15 +159,20 @@ export const updateUser = asyncHandler(async (req, res) => {
     throw ApiError.forbidden('Only Super Admins can modify Super Admin accounts');
   }
 
+  let targetRole = null;
   // Guard role elevation: only Super Admins can assign the super_admin role
   if (patch.role_id !== undefined) {
-    const { data: targetRole } = await supabaseAdmin
+    const { data: foundRole } = await supabaseAdmin
       .from('roles')
-      .select('role_code')
+      .select('role_id, role_code, description')
       .eq('role_id', patch.role_id)
       .single();
 
+    targetRole = foundRole;
     if (!targetRole) throw ApiError.badRequest('That role does not exist');
+    if (targetRole.description?.startsWith('[DEACTIVATED]')) {
+      throw ApiError.badRequest(`Role "${targetRole.role_code}" is currently deactivated and cannot be assigned to users.`);
+    }
 
     if (targetRole.role_code === 'super_admin' && callerRole !== 'super_admin') {
       throw ApiError.forbidden('Only Super Admins can assign the Super Admin role');
@@ -194,6 +207,20 @@ export const updateUser = asyncHandler(async (req, res) => {
 
   invalidateUserProfile(req.params.id);
   await logActivity(req.user.id, 'update_user', 'users', req.params.id, patch);
+
+  if (patch.role_id !== undefined && patch.role_id !== target.role?.role_id && targetRole) {
+    await logActivity(req.user.id, 'USER_ROLE_CHANGED', 'users', req.params.id, {
+      previousRoleId: target.role?.role_id,
+      previousRoleCode: target.role?.role_code,
+      newRoleId: patch.role_id,
+      newRoleCode: targetRole.role_code,
+    });
+    await logActivity(req.user.id, 'ROLE_ASSIGNED', 'roles', patch.role_id, {
+      affectedUserId: req.params.id,
+      roleCode: targetRole.role_code,
+    });
+  }
+
   ok(res, serializeUser(data, req.user.role?.role_code));
 });
 

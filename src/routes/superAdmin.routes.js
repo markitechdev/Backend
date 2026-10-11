@@ -1,4 +1,4 @@
-﻿import { Router } from 'express';
+import { Router } from 'express';
 import superAdminAuthRoutes from './superAdminAuth.routes.js';
 import { authenticateSuperAdmin } from '../middleware/authenticateSuperAdmin.js';
 import * as usersCtrl from '../controllers/users.controller.js';
@@ -63,7 +63,11 @@ router.post('/users/:id/password', validateParams(uuidParamSchema), validateBody
 // Super Admin Roles & Permission Matrix
 router.get('/roles', rolesCtrl.listRoles);
 router.get('/roles/permissions', rolesCtrl.listPermissions);
+router.get('/roles/:id', rolesCtrl.getRole);
+router.get('/roles/:id/users', rolesCtrl.getRoleUsers);
 router.post('/roles', validateBody(rolesCtrl.createRoleSchema), rolesCtrl.createRole);
+router.patch('/roles/:id', validateBody(rolesCtrl.updateRoleSchema), rolesCtrl.updateRole);
+router.put('/roles/:id', validateBody(rolesCtrl.updateRoleSchema), rolesCtrl.updateRole);
 router.put('/roles/:id/permissions', validateBody(rolesCtrl.updatePermissionsSchema), rolesCtrl.updateRolePermissions);
 router.delete('/roles/:id', rolesCtrl.deleteRole);
 

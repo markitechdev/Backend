@@ -6,7 +6,7 @@ import { ok, created } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
 import { invalidateAllUserProfiles } from '../utils/cache.js';
 
-/** GET /api/roles - roles with their permission codes and user counts. */
+/** GET /api/roles - roles with their permission codes, user counts, and active status. */
 export const listRoles = asyncHandler(async (_req, res) => {
   const { data: roles, error } = await supabaseAdmin
     .from('roles')
@@ -16,15 +16,90 @@ export const listRoles = asyncHandler(async (_req, res) => {
 
   const { data: users } = await supabaseAdmin.from('users').select('role_id, is_active');
 
-  ok(res, roles.map((r) => ({
-    roleId: r.role_id,
-    roleCode: r.role_code,
-    roleName: r.role_name,
-    description: r.description,
-    isSystem: r.is_system,
-    userCount: (users || []).filter((u) => u.role_id === r.role_id && u.is_active).length,
-    permissions: (r.role_permissions || []).map((rp) => rp.permissions).filter(Boolean),
-  })));
+  ok(res, (roles || []).map((r) => {
+    const isDeactivated = (r.description || '').startsWith('[DEACTIVATED]');
+    const cleanDesc = (r.description || '').replace(/^\[DEACTIVATED\]\s*/, '');
+    return {
+      roleId: r.role_id,
+      roleCode: r.role_code,
+      roleName: r.role_name,
+      description: cleanDesc,
+      isSystem: r.is_system,
+      isActive: !isDeactivated,
+      userCount: (users || []).filter((u) => u.role_id === r.role_id && u.is_active).length,
+      permissions: (r.role_permissions || []).map((rp) => rp.permissions).filter(Boolean),
+    };
+  }));
+});
+
+/** GET /api/roles/:id - retrieve a single role with effective permissions. */
+export const getRole = asyncHandler(async (req, res) => {
+  const roleId = Number(req.params.id);
+  const { data: role, error } = await supabaseAdmin
+    .from('roles')
+    .select('role_id, role_code, role_name, description, is_system, role_permissions ( permissions ( permission_id, permission_code, module, description ) )')
+    .eq('role_id', roleId)
+    .single();
+
+  if (error || !role) throw ApiError.notFound('Role not found');
+
+  const { count } = await supabaseAdmin
+    .from('users')
+    .select('user_id', { count: 'exact', head: true })
+    .eq('role_id', roleId)
+    .eq('is_active', true);
+
+  const isDeactivated = (role.description || '').startsWith('[DEACTIVATED]');
+  const cleanDesc = (role.description || '').replace(/^\[DEACTIVATED\]\s*/, '');
+
+  ok(res, {
+    roleId: role.role_id,
+    roleCode: role.role_code,
+    roleName: role.role_name,
+    description: cleanDesc,
+    isSystem: role.is_system,
+    isActive: !isDeactivated,
+    userCount: count ?? 0,
+    permissions: (role.role_permissions || []).map((rp) => rp.permissions).filter(Boolean),
+  });
+});
+
+/** GET /api/roles/:id/users - retrieve all users assigned to a specific role. */
+export const getRoleUsers = asyncHandler(async (req, res) => {
+  const roleId = Number(req.params.id);
+  const { data: role, error: roleError } = await supabaseAdmin
+    .from('roles')
+    .select('role_id, role_code, role_name')
+    .eq('role_id', roleId)
+    .single();
+
+  if (roleError || !role) throw ApiError.notFound('Role not found');
+
+  const { data: users, error } = await supabaseAdmin
+    .from('users')
+    .select('user_id, full_name, username, email, position, is_active, created_at')
+    .eq('role_id', roleId)
+    .order('full_name');
+
+  if (error) throw new ApiError(500, error.message);
+
+  ok(res, {
+    role: {
+      roleId: role.role_id,
+      roleCode: role.role_code,
+      roleName: role.role_name,
+    },
+    users: (users || []).map((u) => ({
+      userId: u.user_id,
+      fullName: u.full_name,
+      username: u.username,
+      email: u.email,
+      position: u.position,
+      isActive: u.is_active,
+      createdAt: u.created_at,
+    })),
+    totalUsers: (users || []).length,
+  });
 });
 
 /** GET /api/roles/permissions - the full permission catalogue, grouped by module. */
@@ -63,7 +138,7 @@ export const createRole = asyncHandler(async (req, res) => {
 
   const { data: role, error } = await supabaseAdmin
     .from('roles')
-    .insert({ role_code: roleCode, role_name: roleName, description, is_system: false })
+    .insert({ role_code: roleCode, role_name: roleName, description: description ?? null, is_system: false })
     .select().single();
   if (error) {
     if (error.code === '23505') throw ApiError.conflict('A role with that code already exists');
@@ -75,8 +150,109 @@ export const createRole = asyncHandler(async (req, res) => {
       .insert(permissionIds.map((id) => ({ role_id: role.role_id, permission_id: id })));
   }
 
-  await logActivity(req.user.id, 'create_role', 'roles', role.role_id, { roleCode });
-  created(res, role);
+  await logActivity(req.user.id, 'ROLE_CREATED', 'roles', role.role_id, {
+    roleCode,
+    roleName,
+    permissionsCount: permissionIds.length,
+  });
+  created(res, {
+    roleId: role.role_id,
+    roleCode: role.role_code,
+    roleName: role.role_name,
+    description: role.description,
+    isSystem: false,
+    isActive: true,
+  });
+});
+
+export const updateRoleSchema = z.object({
+  roleName: z.string().min(3).optional(),
+  description: z.string().optional().nullable(),
+  isActive: z.boolean().optional(),
+});
+
+/** PATCH/PUT /api/roles/:id - edits role name, description, or active status. */
+export const updateRole = asyncHandler(async (req, res) => {
+  const callerRole = req.user.role?.role_code;
+  if (callerRole !== 'super_admin') {
+    throw ApiError.forbidden('Only Super Admins can modify roles');
+  }
+
+  const roleId = Number(req.params.id);
+  const { data: existing, error: findError } = await supabaseAdmin
+    .from('roles')
+    .select('role_id, role_code, role_name, description, is_system')
+    .eq('role_id', roleId)
+    .single();
+
+  if (findError || !existing) throw ApiError.notFound('Role not found');
+
+  const { roleName, description, isActive } = req.body;
+  const wasDeactivated = (existing.description || '').startsWith('[DEACTIVATED]');
+  let cleanDesc = description !== undefined
+    ? (description || '')
+    : (existing.description || '').replace(/^\[DEACTIVATED\]\s*/, '');
+
+  if (isActive === false && existing.is_system) {
+    throw ApiError.badRequest('Protected system roles cannot be deactivated');
+  }
+
+  let newIsActive = !wasDeactivated;
+  if (isActive !== undefined) {
+    newIsActive = isActive;
+  }
+
+  const finalDescription = newIsActive ? cleanDesc : `[DEACTIVATED] ${cleanDesc}`.trim();
+
+  const patch = {};
+  if (roleName !== undefined) {
+    if (existing.role_code === 'super_admin') {
+      throw ApiError.forbidden('Super Admin role name cannot be modified');
+    }
+    patch.role_name = roleName;
+  }
+  if (finalDescription !== existing.description) {
+    patch.description = finalDescription;
+  }
+
+  if (Object.keys(patch).length > 0) {
+    const { error: updateError } = await supabaseAdmin
+      .from('roles')
+      .update(patch)
+      .eq('role_id', roleId);
+    if (updateError) throw new ApiError(500, updateError.message);
+  }
+
+  invalidateAllUserProfiles();
+
+  if (isActive !== undefined && isActive !== !wasDeactivated) {
+    const action = isActive ? 'ROLE_ACTIVATED' : 'ROLE_DEACTIVATED';
+    await logActivity(req.user.id, action, 'roles', roleId, {
+      roleCode: existing.role_code,
+      roleName: patch.role_name || existing.role_name,
+    });
+  } else {
+    await logActivity(req.user.id, 'ROLE_UPDATED', 'roles', roleId, {
+      roleCode: existing.role_code,
+      changes: patch,
+    });
+  }
+
+  const { data: updated } = await supabaseAdmin
+    .from('roles')
+    .select('role_id, role_code, role_name, description, is_system, role_permissions ( permissions ( permission_id, permission_code, module, description ) )')
+    .eq('role_id', roleId)
+    .single();
+
+  ok(res, {
+    roleId: updated.role_id,
+    roleCode: updated.role_code,
+    roleName: updated.role_name,
+    description: cleanDesc,
+    isSystem: updated.is_system,
+    isActive: newIsActive,
+    permissions: (updated.role_permissions || []).map((rp) => rp.permissions).filter(Boolean),
+  });
 });
 
 export const updatePermissionsSchema = z.object({
@@ -108,7 +284,14 @@ export const updateRolePermissions = asyncHandler(async (req, res) => {
   }
 
   invalidateAllUserProfiles();
-  await logActivity(req.user.id, 'update_role_permissions', 'roles', roleId, { count: permissionIds.length });
+  await logActivity(req.user.id, 'ROLE_UPDATED', 'roles', roleId, {
+    action: 'permissions_updated',
+    count: permissionIds.length,
+    permissionIds,
+  });
+  await logActivity(req.user.id, 'PERMISSION_ADDED', 'roles', roleId, {
+    count: permissionIds.length,
+  });
   ok(res, { roleId, permissionIds });
 });
 
@@ -131,6 +314,8 @@ export const deleteRole = asyncHandler(async (req, res) => {
 
   await supabaseAdmin.from('roles').delete().eq('role_id', roleId);
   invalidateAllUserProfiles();
-  await logActivity(req.user.id, 'delete_role', 'roles', roleId);
+  await logActivity(req.user.id, 'ROLE_DELETED', 'roles', roleId, {
+    roleCode: role.role_code,
+  });
   ok(res, { message: 'Role deleted' });
 });
