@@ -72,5 +72,6 @@ export const authenticateSuperAdmin = asyncHandler(async (req, _res, next) => {
   req.user = userPayload;
   req.accessToken = token;
   req.isSuperAdmin = true;
+  req.authContext = 'super_admin';
   next();
 });

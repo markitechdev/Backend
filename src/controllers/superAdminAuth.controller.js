@@ -5,6 +5,7 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
 import { revokeToken } from '../utils/tokenBlacklist.js';
+import { invalidateUserProfile } from '../utils/cache.js';
 
 export const superAdminLoginSchema = z.object({
   email: z.string().email('A valid email is required'),
@@ -23,6 +24,9 @@ export const superAdminLogin = asyncHandler(async (req, res) => {
   if (error || !data?.session) {
     throw ApiError.unauthorized('Invalid email or password');
   }
+
+  // Purge any stale cache to ensure fresh verification
+  invalidateUserProfile(data.user.id);
 
   const { data: profile, error: profileError } = await supabaseAdmin
     .from('users')
@@ -108,7 +112,7 @@ export const superAdminMe = asyncHandler(async (req, res) => {
   });
 });
 
-/** POST /api/super-admin/auth/logout - revokes Super Admin session */
+/** POST /api/super-admin/auth/logout - revokes Super Admin session & purges cache */
 export const superAdminLogout = asyncHandler(async (req, res) => {
   if (req.accessToken) {
     revokeToken(req.accessToken);
@@ -118,7 +122,13 @@ export const superAdminLogout = asyncHandler(async (req, res) => {
       // In-memory blacklist ensures revocation
     }
   }
-  await logActivity(req.user.id, 'super_admin_logout', 'auth', req.user.id);
+  if (req.user?.id) {
+    invalidateUserProfile(req.user.id);
+  }
+  await logActivity(req.user.id, 'super_admin_logout', 'auth', req.user.id, {
+    endpoint: '/api/super-admin/auth/logout',
+    revoked: true,
+  });
   ok(res, { message: 'Super Admin signed out successfully' });
 });
 
