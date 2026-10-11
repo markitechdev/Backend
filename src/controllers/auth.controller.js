@@ -1,4 +1,4 @@
-import { z } from 'zod';
+﻿import { z } from 'zod';
 import { supabaseAnon, supabaseAdmin } from '../config/supabase.js';
 import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -11,7 +11,11 @@ export const loginSchema = z.object({
   password: z.string().min(6, 'Password must be at least 6 characters'),
 });
 
-/** POST /api/auth/login - authenticates and returns the session + role + permissions. */
+/**
+ * POST /api/auth/login
+ * Standard authentication flow for Tenant Users (Admin, Manager, Staff, regular users).
+ * Super Admin accounts are strictly rejected to enforce end-to-end authentication isolation.
+ */
 export const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
 
@@ -29,15 +33,37 @@ export const login = asyncHandler(async (req, res) => {
 
   const isSuperAdmin = profile.role?.role_code === 'super_admin';
 
+  // Strict authentication separation: Super Admin accounts MUST use /api/super-admin/auth/login
+  if (isSuperAdmin) {
+    if (data.session?.access_token) {
+      revokeToken(data.session.access_token);
+      try {
+        await supabaseAdmin.auth.admin.signOut(data.session.access_token);
+      } catch {
+        // blacklist guarantees revocation
+      }
+    }
+
+    await logActivity(
+      profile.user_id,
+      'normal_login_denied_super_admin',
+      'auth',
+      profile.user_id,
+      { reason: 'super_admin_attempt_on_normal_login', endpoint: '/api/auth/login' }
+    );
+
+    // Safe message: do not disclose account privileges or role
+    throw ApiError.unauthorized('Unable to authenticate with this login.');
+  }
+
   const { data: perms } = await supabaseAdmin
     .from('role_permissions')
     .select('permissions ( permission_code )')
     .eq('role_id', profile.role.role_id);
 
-  // Distinct audit logging for privileged Super Admin authentication
   await logActivity(
     profile.user_id,
-    isSuperAdmin ? 'super_admin_login' : 'login',
+    'login',
     'auth',
     profile.user_id,
     { role: profile.role.role_code }
@@ -56,7 +82,7 @@ export const login = asyncHandler(async (req, res) => {
       email: profile.email,
       position: profile.position,
       role: profile.role,
-      isSuperAdmin,
+      isSuperAdmin: false,
       permissions: (perms || []).map((p) => p.permissions.permission_code),
     },
   });
