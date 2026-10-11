@@ -14,7 +14,16 @@ export const listLogs = asyncHandler(async (req, res) => {
 
   if (action)     q = q.eq('action', action);
   if (entityType) q = q.eq('entity_type', entityType);
-  if (userId)     q = q.eq('user_id', userId);
+  // Scope enforcement: only Super Admin can inspect all logs; other roles see only their own
+  const isSuperAdmin = req.user.role?.role_code === 'super_admin';
+  if (!isSuperAdmin) {
+    if (userId && userId !== req.user.id) {
+      throw ApiError.forbidden('Access denied: You can only view your own activity logs');
+    }
+    q = q.eq('user_id', req.user.id);
+  } else if (userId) {
+    q = q.eq('user_id', userId);
+  }
 
   const { data, error } = await q;
   if (error) throw new ApiError(500, error.message);

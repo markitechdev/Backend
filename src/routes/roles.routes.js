@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { authenticate } from '../middleware/authenticate.js';
 import { requirePermission, requireAnyPermission, requireRole } from '../middleware/authorize.js';
+import { enforceTenantIsolation } from '../middleware/tenantIsolation.js';
 import { validateBody } from '../middleware/validate.js';
 import * as c from '../controllers/roles.controller.js';
 
 const router = Router();
 router.use(authenticate);
+router.use(enforceTenantIsolation);
 
 // Secured: only users with role/user management or view rights can read the role catalogue
 router.get('/', requireAnyPermission('roles.manage', 'roles.view', 'users.manage', 'users.view'), c.listRoles);
