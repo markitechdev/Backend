@@ -13,8 +13,8 @@ export const superAdminLoginSchema = z.object({
 
 /**
  * POST /api/super-admin/auth/login
- * Strictly restricted to accounts holding the `super_admin` role.
- * Any non-super_admin account is denied with a safe authentication failure.
+ * Strictly restricted to accounts holding the verified `super_admin` role.
+ * Non-super-admins (admin, manager, staff, regular users) are strictly denied.
  */
 export const superAdminLogin = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
@@ -31,7 +31,6 @@ export const superAdminLogin = asyncHandler(async (req, res) => {
     .single();
 
   if (profileError || !profile) {
-    // Revoke session if no linked profile
     if (data.session?.access_token) revokeToken(data.session.access_token);
     throw ApiError.unauthorized('Unable to authenticate with this login.');
   }
@@ -41,9 +40,8 @@ export const superAdminLogin = asyncHandler(async (req, res) => {
     throw ApiError.forbidden('This account has been deactivated.');
   }
 
-  // Strict enforcement: MUST be Super Admin
+  // Strict role check: MUST be super_admin
   if (profile.role?.role_code !== 'super_admin') {
-    // Immediately invalidate the Supabase session token so it cannot be used
     if (data.session?.access_token) {
       revokeToken(data.session.access_token);
       try {
@@ -52,7 +50,17 @@ export const superAdminLogin = asyncHandler(async (req, res) => {
         // blacklist guarantees revocation
       }
     }
-    // Safe failure message: do not reveal role or account details
+
+    // Security audit log for unauthorized Super Admin login attempt
+    await logActivity(
+      profile.user_id,
+      'super_admin_login_denied',
+      'auth',
+      profile.user_id,
+      { attemptedRole: profile.role?.role_code, endpoint: '/api/super-admin/auth/login' }
+    );
+
+    // Safe error message to avoid role leaking
     throw ApiError.unauthorized('Unable to authenticate with this login.');
   }
 
@@ -61,7 +69,7 @@ export const superAdminLogin = asyncHandler(async (req, res) => {
     .select('permissions ( permission_code )')
     .eq('role_id', profile.role.role_id);
 
-  // Distinct audit logging for Super Admin authentication
+  // Distinct audit logging for successful Super Admin authentication
   await logActivity(
     profile.user_id,
     'super_admin_login',
