@@ -50,7 +50,15 @@ export const createRoleSchema = z.object({
 
 /** POST /api/roles */
 export const createRole = asyncHandler(async (req, res) => {
+  const callerRole = req.user.role?.role_code;
+  if (callerRole !== 'super_admin') {
+    throw ApiError.forbidden('Only Super Admins can create new system roles');
+  }
+
   const { roleCode, roleName, description, permissionIds } = req.body;
+  if (roleCode === 'super_admin') {
+    throw ApiError.badRequest('Cannot create duplicate super_admin role');
+  }
 
   const { data: role, error } = await supabaseAdmin
     .from('roles')
@@ -76,6 +84,11 @@ export const updatePermissionsSchema = z.object({
 
 /** PUT /api/roles/:id/permissions - replaces the role's permission set. */
 export const updateRolePermissions = asyncHandler(async (req, res) => {
+  const callerRole = req.user.role?.role_code;
+  if (callerRole !== 'super_admin') {
+    throw ApiError.forbidden('Only Super Admins are permitted to modify role permissions');
+  }
+
   const roleId = Number(req.params.id);
   const { permissionIds } = req.body;
 
@@ -83,7 +96,7 @@ export const updateRolePermissions = asyncHandler(async (req, res) => {
     .from('roles').select('role_id, role_code').eq('role_id', roleId).single();
   if (!role) throw ApiError.notFound('Role not found');
   if (role.role_code === 'super_admin') {
-    throw ApiError.forbidden('Super Admin permissions cannot be reduced.');
+    throw ApiError.forbidden('Super Admin permissions cannot be reduced or modified.');
   }
 
   await supabaseAdmin.from('role_permissions').delete().eq('role_id', roleId);
@@ -99,6 +112,11 @@ export const updateRolePermissions = asyncHandler(async (req, res) => {
 
 /** DELETE /api/roles/:id */
 export const deleteRole = asyncHandler(async (req, res) => {
+  const callerRole = req.user.role?.role_code;
+  if (callerRole !== 'super_admin') {
+    throw ApiError.forbidden('Only Super Admins can delete roles');
+  }
+
   const roleId = Number(req.params.id);
   const { data: role } = await supabaseAdmin
     .from('roles').select('is_system, role_code').eq('role_id', roleId).single();
