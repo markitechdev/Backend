@@ -1,6 +1,6 @@
 ﻿import { Router } from 'express';
 import authRoutes from './auth.routes.js';
-import superAdminAuthRoutes from './superAdminAuth.routes.js';
+import superAdminRoutes from './superAdmin.routes.js';
 import userRoutes from './users.routes.js';
 import roleRoutes from './roles.routes.js';
 import productRoutes from './products.routes.js';
@@ -17,11 +17,13 @@ const router = Router();
 router.get('/health', (_req, res) =>
   res.json({ success: true, data: { status: 'ok', time: new Date().toISOString() } }));
 
-// Authentication flows
+// Authentication & Identity flows
 router.use('/auth', authRoutes);
-router.use('/super-admin/auth', superAdminAuthRoutes);
 
-// Business & Operational modules
+// Dedicated Super Admin Platform APIs (all /api/super-admin/* routes)
+router.use('/super-admin', superAdminRoutes);
+
+// Standard Tenant Business & Operational modules
 router.use('/users', userRoutes);
 router.use('/roles', roleRoutes);
 router.use('/products', productRoutes);
