@@ -15,7 +15,7 @@ export const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
 
   const { data, error } = await supabaseAnon.auth.signInWithPassword({ email, password });
-  if (error || !data?.session) throw ApiError.unauthorized('Incorrect email or password');
+  if (error || !data?.session) throw ApiError.unauthorized('Invalid email or password');
 
   const { data: profile, error: profileError } = await supabaseAdmin
     .from('users')
@@ -26,12 +26,21 @@ export const login = asyncHandler(async (req, res) => {
   if (profileError || !profile) throw ApiError.forbidden('No profile is linked to this account.');
   if (!profile.is_active) throw ApiError.forbidden('This account has been deactivated.');
 
+  const isSuperAdmin = profile.role?.role_code === 'super_admin';
+
   const { data: perms } = await supabaseAdmin
     .from('role_permissions')
     .select('permissions ( permission_code )')
     .eq('role_id', profile.role.role_id);
 
-  await logActivity(profile.user_id, 'login', 'auth', profile.user_id);
+  // Distinct audit logging for privileged Super Admin authentication
+  await logActivity(
+    profile.user_id,
+    isSuperAdmin ? 'super_admin_login' : 'login',
+    'auth',
+    profile.user_id,
+    { role: profile.role.role_code }
+  );
 
   ok(res, {
     session: {
@@ -46,13 +55,20 @@ export const login = asyncHandler(async (req, res) => {
       email: profile.email,
       position: profile.position,
       role: profile.role,
+      isSuperAdmin,
       permissions: (perms || []).map((p) => p.permissions.permission_code),
     },
   });
 });
 
 /** GET /api/auth/me - returns the caller loaded by the authenticate middleware. */
-export const me = asyncHandler(async (req, res) => ok(res, req.user));
+export const me = asyncHandler(async (req, res) => {
+  const isSuperAdmin = req.user.role?.role_code === 'super_admin';
+  ok(res, {
+    ...req.user,
+    isSuperAdmin,
+  });
+});
 
 /** POST /api/auth/logout */
 export const logout = asyncHandler(async (req, res) => {
