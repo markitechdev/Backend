@@ -103,18 +103,55 @@ export const updateUser = asyncHandler(async (req, res) => {
 
   if (!Object.keys(patch).length) throw ApiError.badRequest('No fields to update');
 
-  // Guard: never let the last active Super Admin lock themselves out.
-  if (patch.role_id !== undefined || patch.is_active === false) {
-    const { data: target } = await supabaseAdmin
-      .from('users').select('role:roles(role_code)').eq('user_id', req.params.id).single();
-    if (target?.role?.role_code === 'super_admin') {
-      const { count } = await supabaseAdmin
-        .from('users')
-        .select('user_id, roles!inner(role_code)', { count: 'exact', head: true })
-        .eq('is_active', true).eq('roles.role_code', 'super_admin');
-      if ((count ?? 0) <= 1) {
-        throw ApiError.conflict('This is the last active Super Admin and cannot be demoted or deactivated.');
+  // Fetch target user to inspect role tier
+  const { data: target, error: targetError } = await supabaseAdmin
+    .from('users')
+    .select('user_id, role:roles(role_id, role_code)')
+    .eq('user_id', req.params.id)
+    .single();
+
+  if (targetError || !target) throw ApiError.notFound('User not found');
+
+  const callerRole = req.user.role?.role_code;
+
+  // Block non-super-admins from modifying Super Admin accounts
+  if (target.role?.role_code === 'super_admin' && callerRole !== 'super_admin') {
+    throw ApiError.forbidden('Only Super Admins can modify Super Admin accounts');
+  }
+
+  // Guard role elevation: only Super Admins can assign the super_admin role
+  if (patch.role_id !== undefined) {
+    const { data: targetRole } = await supabaseAdmin
+      .from('roles')
+      .select('role_code')
+      .eq('role_id', patch.role_id)
+      .single();
+
+    if (!targetRole) throw ApiError.badRequest('That role does not exist');
+
+    if (targetRole.role_code === 'super_admin' && callerRole !== 'super_admin') {
+      throw ApiError.forbidden('Only Super Admins can assign the Super Admin role');
+    }
+
+    // Non-super-admins cannot elevate user accounts above or equal to caller tier
+    if (callerRole !== 'super_admin' && targetRole.role_code === callerRole && req.params.id === req.user.id) {
+      // Self-promotion attempt prevented
+      if (patch.role_id !== target.role?.role_id) {
+        throw ApiError.forbidden('Users cannot modify their own administrative tier');
       }
+    }
+  }
+
+  // Guard: never let the last active Super Admin lock themselves out.
+  if (target.role?.role_code === 'super_admin' && (patch.role_id !== undefined || patch.is_active === false)) {
+    const { count } = await supabaseAdmin
+      .from('users')
+      .select('user_id, roles!inner(role_code)', { count: 'exact', head: true })
+      .eq('is_active', true)
+      .eq('roles.role_code', 'super_admin');
+
+    if ((count ?? 0) <= 1) {
+      throw ApiError.conflict('This is the last active Super Admin and cannot be demoted or deactivated.');
     }
   }
 
@@ -131,6 +168,18 @@ export const updateUser = asyncHandler(async (req, res) => {
 export const deleteUser = asyncHandler(async (req, res) => {
   if (req.params.id === req.user.id) throw ApiError.badRequest('You cannot delete your own account');
 
+  const { data: target } = await supabaseAdmin
+    .from('users')
+    .select('user_id, role:roles(role_code)')
+    .eq('user_id', req.params.id)
+    .single();
+
+  if (!target) throw ApiError.notFound('User not found');
+
+  if (target.role?.role_code === 'super_admin' && req.user.role?.role_code !== 'super_admin') {
+    throw ApiError.forbidden('Only Super Admins can delete Super Admin accounts');
+  }
+
   const { error } = await supabaseAdmin.auth.admin.deleteUser(req.params.id);
   if (error) throw new ApiError(500, error.message);
 
@@ -142,10 +191,31 @@ export const resetPasswordSchema = z.object({ password: z.string().min(8) });
 
 /** POST /api/users/:id/password */
 export const resetPassword = asyncHandler(async (req, res) => {
+  // Inspect target user tier to prevent IDOR against Super Admins
+  const { data: target, error: targetError } = await supabaseAdmin
+    .from('users')
+    .select('user_id, role:roles(role_code)')
+    .eq('user_id', req.params.id)
+    .single();
+
+  if (targetError || !target) throw ApiError.notFound('User not found');
+
+  const callerRole = req.user.role?.role_code;
+
+  if (target.role?.role_code === 'super_admin' && callerRole !== 'super_admin') {
+    throw ApiError.forbidden('Insufficient privileges to modify Super Admin credentials');
+  }
+
+  // Non-super-admins cannot reset credentials of other administrative tier accounts
+  if (callerRole !== 'super_admin' && req.params.id !== req.user.id && target.role?.role_code !== 'staff_admin') {
+    throw ApiError.forbidden('Insufficient privileges to modify credentials of this account tier');
+  }
+
   const { error } = await supabaseAdmin.auth.admin.updateUserById(req.params.id, {
     password: req.body.password,
   });
   if (error) throw ApiError.badRequest(error.message);
+
   await logActivity(req.user.id, 'reset_password', 'users', req.params.id);
   ok(res, { message: 'Password updated' });
 });
