@@ -6,6 +6,7 @@ import { ok } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
 import { revokeToken, isTokenRevoked } from '../utils/tokenBlacklist.js';
 import { invalidateUserProfile } from '../utils/cache.js';
+import { loadUserIdentity } from '../services/identity.service.js';
 
 export const superAdminLoginSchema = z.object({
   email: z.string().email('A valid email is required'),
@@ -25,62 +26,35 @@ export const superAdminLogin = asyncHandler(async (req, res) => {
     throw ApiError.unauthorized('Invalid email or password');
   }
 
-  // Purge any stale cache to ensure fresh verification
-  invalidateUserProfile(data.user.id);
+  const discardSession = async () => {
+    revokeToken(data.session.access_token);
+    revokeToken(data.session.refresh_token);
+    try { await supabaseAdmin.auth.admin.signOut(data.session.access_token); } catch { /* blacklist covers it */ }
+  };
 
-  const { data: profile, error: profileError } = await supabaseAdmin
-    .from('users')
-    .select('user_id, full_name, username, email, is_active, position, role:roles ( role_id, role_code, role_name )')
-    .eq('user_id', data.user.id)
-    .single();
-
-  if (profileError || !profile) {
-    if (data.session?.access_token) revokeToken(data.session.access_token);
-    throw ApiError.unauthorized('Unable to authenticate with this login.');
-  }
-
-  if (!profile.is_active) {
-    if (data.session?.access_token) revokeToken(data.session.access_token);
-    throw ApiError.forbidden('This account has been deactivated.');
+  let identity;
+  try {
+    identity = await loadUserIdentity(data.user.id, { useCache: false });
+  } catch (err) {
+    await discardSession();
+    // A missing profile is reported generically; deactivation is reported as-is.
+    if (err.status === 403 && /no profile/i.test(err.message)) {
+      throw ApiError.unauthorized('Unable to authenticate with this login.');
+    }
+    throw err;
   }
 
   // Strict role check: MUST be super_admin
-  if (profile.role?.role_code !== 'super_admin') {
-    if (data.session?.access_token) {
-      revokeToken(data.session.access_token);
-      try {
-        await supabaseAdmin.auth.admin.signOut(data.session.access_token);
-      } catch {
-        // blacklist guarantees revocation
-      }
-    }
-
-    // Security audit log for unauthorized Super Admin login attempt
-    await logActivity(
-      profile.user_id,
-      'super_admin_login_denied',
-      'auth',
-      profile.user_id,
-      { attemptedRole: profile.role?.role_code, endpoint: '/api/super-admin/auth/login' }
-    );
-
+  if (!identity.isSuperAdmin) {
+    await discardSession();
+    await logActivity(identity.id, 'super_admin_login_denied', 'auth', identity.id,
+      { attemptedRole: identity.role?.role_code, endpoint: '/api/super-admin/auth/login' });
     // Safe error message to avoid role leaking
     throw ApiError.unauthorized('Unable to authenticate with this login.');
   }
 
-  const { data: perms } = await supabaseAdmin
-    .from('role_permissions')
-    .select('permissions ( permission_code )')
-    .eq('role_id', profile.role.role_id);
-
-  // Distinct audit logging for successful Super Admin authentication
-  await logActivity(
-    profile.user_id,
-    'SUPER_ADMIN_LOGIN',
-    'auth',
-    profile.user_id,
-    { role: 'super_admin', endpoint: '/api/super-admin/auth/login' }
-  );
+  await logActivity(identity.id, 'SUPER_ADMIN_LOGIN', 'auth', identity.id,
+    { role: 'super_admin', endpoint: '/api/super-admin/auth/login' });
 
   ok(res, {
     session: {
@@ -88,16 +62,7 @@ export const superAdminLogin = asyncHandler(async (req, res) => {
       refreshToken: data.session.refresh_token,
       expiresAt: data.session.expires_at,
     },
-    user: {
-      id: profile.user_id,
-      fullName: profile.full_name,
-      username: profile.username,
-      email: profile.email,
-      position: profile.position,
-      role: profile.role,
-      isSuperAdmin: true,
-      permissions: (perms || []).map((p) => p.permissions.permission_code),
-    },
+    user: { ...identity, isSuperAdmin: true },
   });
 });
 
@@ -136,7 +101,7 @@ export const superAdminLogout = asyncHandler(async (req, res) => {
   res.clearCookie('sb-access-token', { path: '/' });
   res.clearCookie('sb-refresh-token', { path: '/' });
 
-  await logActivity(req.user?.id || 'unknown', 'SUPER_ADMIN_LOGOUT', 'auth', req.user?.id || null, {
+  await logActivity(req.user?.id ?? null, 'SUPER_ADMIN_LOGOUT', 'auth', req.user?.id || null, {
     endpoint: '/api/super-admin/auth/logout',
     revoked: true,
   });
@@ -159,16 +124,17 @@ export const superAdminRefresh = asyncHandler(async (req, res) => {
     throw ApiError.unauthorized('Session could not be refreshed');
   }
 
-  // Verify caller is an active Super Admin
-  const { data: profile } = await supabaseAdmin
-    .from('users')
-    .select('user_id, is_active, role:roles ( role_code )')
-    .eq('user_id', data.session.user.id)
-    .single();
+  // Verify caller is still an active Super Admin
+  let identity = null;
+  try {
+    identity = await loadUserIdentity(data.session.user.id, { useCache: false });
+  } catch {
+    identity = null;
+  }
 
-  if (!profile || !profile.is_active || profile.role?.role_code !== 'super_admin') {
-    if (data.session.access_token) revokeToken(data.session.access_token);
-    if (data.session.refresh_token) revokeToken(data.session.refresh_token);
+  if (!identity?.isSuperAdmin) {
+    revokeToken(data.session.access_token);
+    revokeToken(data.session.refresh_token);
     throw ApiError.forbidden('Access denied: Restricted to active Super Admin');
   }
 
