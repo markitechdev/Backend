@@ -1,0 +1,78 @@
+# System Fixes — 2026-10-12
+
+Debug pass across the Backend and Frontend, mapped to the 8 required improvements.
+All fixes were run end-to-end against a local Postgres + PostgREST copy of the schema (01–05 SQL files), with the four seeded accounts, and in a real browser.
+
+## Run this once in Supabase
+
+`supabase/05_fixes.sql` (SQL Editor, after 01–04). It is safe to run more than once.
+
+## 8 · Data leak (Super Admin)
+
+| Problem | Fix |
+|---|---|
+| `GET /api/users` and `/users/:id` returned Super Admin accounts and emails to any `users.view` holder | Super Admin accounts are hidden from non-super-admins (404 on direct id) |
+| `GET /api/roles/:id/users` listed Super Admin accounts | 404 for the super_admin role unless caller is Super Admin |
+| Dashboard "Recent Activity" showed everyone's audit log (incl. Super Admin actions), while `/api/logs` limited users to their own | Same rule as `/api/logs`: non-super-admins see only their own activity; cache is now per user |
+| Search text was pasted into a PostgREST `.or()` filter (filter injection, e.g. `x,role_id.eq.1`) | `safeSearchTerm()` strips filter syntax (users, products) |
+| Email masking was hardcoded to role codes | Full email/phone only for `users.manage` or Super Admin |
+| RLS `users_update_self` let a user change their own `role_id` (self-promotion) | Policy dropped; `users_read/manage` exclude Super Admin rows; audit inserts must be your own user id |
+| Super Admin demo password shipped in the production JS bundle | Demo credentials exist only in dev builds |
+| Frontend sent `x-tenant-id` from editable localStorage | Removed; tenant comes from the server identity |
+
+## 5 · Roles & permissions
+
+- Dashboard used `perms.includes()` → ignored `module.manage` and aliases. Now uses the same `userCan()` as the routes.
+- Frontend `auth.can()` now mirrors backend `hasUserPermission()` (manage/alias rules).
+- Deactivating a role was cosmetic → users with a deactivated role are now refused (login, refresh and every request).
+- `PUT /roles/:id/permissions` deleted all permissions *then* failed on an unknown id → ids validated first, old set restored on failure. `createRole` no longer ignores insert errors.
+- New `roles.view` permission (Staff Admin) → read-only permission matrix at `/roles`.
+
+## 1 · Super Admin login / sessions
+
+- Refresh token was never stored → sessions died after ~1 h. Now stored; one shared refresh on 401 with automatic retry, plus proactive refresh before expiry.
+- Profile is verified with the server before the first route guard runs; network errors no longer log you out.
+- Expired session → login page with "session expired" notice and return to the original page.
+- Login, refresh and both middlewares share one identity loader (`services/identity.service.js`).
+
+## 6 · Routing
+
+- Any 403 (even a refused Save) redirected to Access Denied — now only page-data GETs do; actions show a toast.
+- Post-login `redirect` is restricted to in-app paths.
+- 404 page is public and uses the full layout only when signed in; `/inventory/abc` → 404.
+- Inventory filters live in the URL (refresh, Back/Forward, top-bar search on the same page all work).
+- `vercel.json` / `public/_redirects` for deep-link refresh in production. Logout uses `replace`.
+
+## 2 · Caching  ·  3 · Loading states
+
+- Reference data (categories, active suppliers, roles) cached 30–60 s, shared in-flight, invalidated on writes and sign-in/out.
+- Server dashboard cache invalidated on product/stock/alert/user/role changes.
+- Audit log is paginated in the database (was loading the whole table).
+- Stale responses from fast typing/filtering are ignored (request sequence guards).
+- Error + "Try again" states on Users, Activity Log, Inventory, Reports, Finance.
+
+## 4 · Horizontal graph
+
+New `components/ui/HorizontalBarChart.vue`: shared "nice" scale with gridlines and axis ticks, hover/keyboard tooltip (value, % of total, detail), long-label truncation, "Other (n)" folding for many categories, visible slivers for tiny values, loading/empty/error states, mobile layout. Reports adds a Value/Units toggle and a category filter that re-draws the graph.
+
+## Broken pages fixed
+
+- **User Management / Staff / Activity Log**: read `full_name`/`user_id`/`is_active` while the API returns `fullName`/`userId`/`isActive` → blank names, everyone "Deactivated", every action hit `/users/undefined`.
+- **Reports**: crashed on first render (`summary.totalValue` while null); now uses `/api/reports/*` so Staff/Finance Admin are no longer sent to Access Denied.
+- **Finance**: called `/movements/summary` (no permission for Finance Admin) → Access Denied.
+- **Inventory edit** silently reset unit of measure to `pc`; negative adjustments were impossible.
+
+## Inventory & alert logic
+
+- Acknowledged alerts never auto-resolved and were duplicated on the next stock change (unique index only covered `active`).
+- Low Stock and Reorder fired together. Now: out (0) · low (≤ min) · reorder (min < stock ≤ reorder point).
+- Reorder point must be ≥ minimum stock (API + form).
+- Resolving a stock alert whose condition still holds → 409 "acknowledge instead".
+- Deleting a product cascade-deleted its movement ledger (shrinkage history) → products with history are archived (`discontinued`); FK is now `RESTRICT`.
+- **New: physical (cycle) count** — `POST /api/movements/count`; the variance is recorded as `missing` (shrinkage) or `adjustment`.
+- Date filters: `to=YYYY-MM-DD` now includes the whole day; invalid/reversed dates → 400.
+- Paginated reports kept dropping `summary`; now returned in `meta.summary`.
+
+## Not done (needs a decision)
+
+True multi-tenancy (separate client workspaces). The schema is single-organization; `/super-admin/tenants` now reports that honestly. Adding it means an `organizations` table, `organization_id` on every business table, and scoping every query.
