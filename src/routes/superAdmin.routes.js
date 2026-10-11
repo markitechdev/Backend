@@ -24,7 +24,7 @@ router.use('/auth', superAdminAuthRoutes);
 router.use(authenticateSuperAdmin);
 
 // Super Admin platform telemetry & overview
-router.get('/dashboard', dashCtrl.getDashboard);
+router.get('/dashboard', dashCtrl.getSuperAdminDashboard);
 router.get('/stats', asyncHandler(async (_req, res) => {
   const [usersCount, rolesCount, logsCount] = await Promise.all([
     supabaseAdmin.from('users').select('*', { count: 'exact', head: true }),

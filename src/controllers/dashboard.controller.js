@@ -3,6 +3,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok } from '../utils/respond.js';
 import { dashboardCache } from '../utils/cache.js';
+import { parseRoleMetadata } from './roles.controller.js';
 
 const statusOf = (r) => {
   if (r.current_stock === 0) return 'out_of_stock';
@@ -142,4 +143,153 @@ export const getDashboard = asyncHandler(async (req, res) => {
 
   dashboardCache.set(cacheKey, payload);
   ok(res, payload);
+});
+
+/**
+ * GET /api/super-admin/dashboard
+ * Dedicated platform oversight telemetry for Super Administrators.
+ * Focuses on organization governance, role distribution, audit events, and system inventory health.
+ */
+export const getSuperAdminDashboard = asyncHandler(async (req, res) => {
+  if (req.user?.role?.role_code !== 'super_admin') {
+    throw ApiError.forbidden('Access restricted to Super Admin');
+  }
+
+  const [
+    usersCountRes,
+    activeUsersRes,
+    rolesRes,
+    allUsersRes,
+    logsRes,
+    logsCountRes,
+    alertsRes,
+    invRes,
+    shrinkRes,
+  ] = await Promise.all([
+    supabaseAdmin.from('users').select('*', { count: 'exact', head: true }),
+    supabaseAdmin.from('users').select('*', { count: 'exact', head: true }).eq('is_active', true),
+    supabaseAdmin.from('roles').select('role_id, role_code, role_name, description, is_system, role_permissions(permission_id)'),
+    supabaseAdmin.from('users').select('user_id, role_id, is_active'),
+    supabaseAdmin.from('activity_logs')
+      .select('log_id, action, entity_type, entity_id, details, created_at, user:users ( user_id, full_name, role:roles ( role_code, role_name, description ) )')
+      .order('created_at', { ascending: false })
+      .limit(10),
+    supabaseAdmin.from('activity_logs').select('*', { count: 'exact', head: true }),
+    supabaseAdmin.from('alerts')
+      .select('alert_id, alert_type, alert_message, priority, date_created, product:products ( product_id, product_name, sku )')
+      .eq('alert_status', 'active')
+      .order('priority', { ascending: false })
+      .order('date_created', { ascending: false }),
+    supabaseAdmin.from('inventory')
+      .select('current_stock, minimum_stock, reorder_point, product:products ( product_id, product_name, sku, unit_price )'),
+    supabaseAdmin.from('stock_movements')
+      .select('quantity, movement_type, product:products ( unit_price )')
+      .in('movement_type', ['damaged', 'missing'])
+      .gte('date_recorded', new Date(Date.now() - 30 * 864e5).toISOString()),
+  ]);
+
+  const roles = rolesRes.data || [];
+  const users = allUsersRes.data || [];
+  const alerts = alertsRes.data || [];
+  const inventory = (invRes.data || []).filter((r) => r.product);
+  const shrink = shrinkRes.data || [];
+
+  const totalRoles = roles.length;
+  const customRoles = roles.filter((r) => !r.is_system).length;
+  const activeRoles = roles.filter((r) => parseRoleMetadata(r.description, r.role_code).isActive).length;
+  const criticalAlerts = alerts.filter((a) => a.priority === 'critical');
+
+  const roleDistribution = roles.map((r) => {
+    const meta = parseRoleMetadata(r.description, r.role_code);
+    const assignedUsers = users.filter((u) => u.role_id === r.role_id);
+    return {
+      roleId: r.role_id,
+      roleCode: r.role_code,
+      roleName: r.role_name,
+      icon: meta.icon,
+      isSystem: r.is_system,
+      isActive: meta.isActive,
+      userCount: assignedUsers.length,
+      activeUserCount: assignedUsers.filter((u) => u.is_active).length,
+      permissionCount: (r.role_permissions || []).length,
+    };
+  });
+
+  let totalStockUnits = 0;
+  let totalValuation = 0;
+  let lowStockCount = 0;
+  let outOfStockCount = 0;
+
+  for (const item of inventory) {
+    totalStockUnits += item.current_stock;
+    totalValuation += item.current_stock * Number(item.product.unit_price || 0);
+    if (item.current_stock === 0) outOfStockCount += 1;
+    else if (item.current_stock <= item.minimum_stock) lowStockCount += 1;
+  }
+
+  const shrinkageUnits30d = shrink.reduce((acc, m) => acc + Math.abs(m.quantity), 0);
+  const shrinkageValue30d = Number(
+    shrink.reduce((acc, m) => acc + Math.abs(m.quantity) * Number(m.product?.unit_price || 0), 0).toFixed(2)
+  );
+
+  const recentAdministrativeActivity = (logsRes.data || []).map((l) => {
+    const actorRole = l.user?.role;
+    const actorMeta = actorRole ? parseRoleMetadata(actorRole.description, actorRole.role_code) : null;
+    return {
+      logId: l.log_id,
+      action: l.action,
+      entityType: l.entity_type,
+      entityId: l.entity_id,
+      details: l.details,
+      createdAt: l.created_at,
+      actor: {
+        userId: l.user?.user_id || null,
+        fullName: l.user?.full_name || 'System / Platform',
+        roleCode: actorRole?.role_code || 'system',
+        roleName: actorRole?.role_name || 'System',
+        icon: actorMeta?.icon || '🛡️',
+      },
+    };
+  });
+
+  ok(res, {
+    platformOverview: {
+      totalOrganizations: 1,
+      totalUsers: usersCountRes.count || 0,
+      activeUsers: activeUsersRes.count || 0,
+      totalRoles,
+      customRoles,
+      activeRoles,
+      criticalAlertsCount: criticalAlerts.length,
+      activeAlertsCount: alerts.length,
+      totalAuditLogs: logsCountRes.count || 0,
+      platformStatus: 'healthy',
+      generatedAt: new Date().toISOString(),
+    },
+    accessOverview: {
+      roleDistribution,
+    },
+    inventoryHealth: {
+      totalProducts: inventory.length,
+      totalStockUnits,
+      totalValuation: Number(totalValuation.toFixed(2)),
+      lowStockCount,
+      outOfStockCount,
+      shrinkageUnits30d,
+      shrinkageValue30d,
+    },
+    itemsNeedingAttention: {
+      criticalAlerts: criticalAlerts.slice(0, 5),
+      outOfStockItems: inventory
+        .filter((i) => i.current_stock === 0)
+        .slice(0, 5)
+        .map((i) => ({
+          productId: i.product.product_id,
+          productName: i.product.product_name,
+          sku: i.product.sku,
+          unitPrice: Number(i.product.unit_price || 0),
+        })),
+    },
+    recentAdministrativeActivity,
+  });
 });
