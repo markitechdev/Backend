@@ -88,7 +88,9 @@ export const updateAlertStatus = asyncHandler(async (req, res) => {
   if (error) throw new ApiError(500, error.message);
   if (!data) throw ApiError.notFound('Alert not found');
 
-  await logActivity(req.user.id, `alert_${req.body.status}`, 'alerts', req.params.id, {
+  const auditAction = req.body.status === 'resolved' ? 'ALERT_RESOLVED' : 'ALERT_ACKNOWLEDGED';
+  await logActivity(req.user.id, auditAction, 'alerts', req.params.id, {
+    status: req.body.status,
     note: req.body.note ?? null,
   });
   ok(res, data);

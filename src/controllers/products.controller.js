@@ -126,7 +126,7 @@ export const createProduct = asyncHandler(async (req, res) => {
   // trg_apply_stock_movement trigger would then add the quantity a second time.
   // Every change after this point must go through /api/movements.
 
-  await logActivity(req.user.id, 'create_product', 'products', product.product_id, { sku: b.sku });
+  await logActivity(req.user.id, 'PRODUCT_CREATED', 'products', product.product_id, { sku: b.sku, name: product.product_name });
   const { data: full } = await supabaseAdmin
     .from('products').select(SELECT).eq('product_id', product.product_id).single();
   created(res, decorate(full));
@@ -172,7 +172,7 @@ export const updateProduct = asyncHandler(async (req, res) => {
   }
 
   await refreshAlertsForProduct(Number(req.params.id));
-  await logActivity(req.user.id, 'update_product', 'products', req.params.id, { ...productPatch, ...invPatch });
+  await logActivity(req.user.id, 'PRODUCT_UPDATED', 'products', req.params.id, { ...productPatch, ...invPatch });
 
   const { data: full } = await supabaseAdmin
     .from('products').select(SELECT).eq('product_id', req.params.id).single();
@@ -188,6 +188,6 @@ export const deleteProduct = asyncHandler(async (req, res) => {
 
   const { error } = await supabaseAdmin.from('products').delete().eq('product_id', req.params.id);
   if (error) throw new ApiError(500, error.message);
-  await logActivity(req.user.id, 'delete_product', 'products', req.params.id, { name: existing.product_name });
+  await logActivity(req.user.id, 'PRODUCT_DELETED', 'products', req.params.id, { name: existing.product_name });
   noContent(res);
 });

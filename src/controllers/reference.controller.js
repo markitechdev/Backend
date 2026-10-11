@@ -28,7 +28,7 @@ export const createCategory = asyncHandler(async (req, res) => {
     if (error.code === '23505') throw ApiError.conflict('That category already exists');
     throw new ApiError(500, error.message);
   }
-  await logActivity(req.user.id, 'create_category', 'categories', data.category_id);
+  await logActivity(req.user.id, 'CATEGORY_CREATED', 'categories', data.category_id, { name: data.category_name });
   created(res, data);
 });
 
@@ -41,7 +41,7 @@ export const updateCategory = asyncHandler(async (req, res) => {
     .from('categories').update(patch).eq('category_id', req.params.id).select().maybeSingle();
   if (error) throw new ApiError(500, error.message);
   if (!data) throw ApiError.notFound('Category not found');
-  await logActivity(req.user.id, 'update_category', 'categories', req.params.id, patch);
+  await logActivity(req.user.id, 'CATEGORY_UPDATED', 'categories', req.params.id, patch);
   ok(res, data);
 });
 
@@ -53,7 +53,7 @@ export const deleteCategory = asyncHandler(async (req, res) => {
 
   const { error } = await supabaseAdmin.from('categories').delete().eq('category_id', req.params.id);
   if (error) throw new ApiError(500, error.message);
-  await logActivity(req.user.id, 'delete_category', 'categories', req.params.id);
+  await logActivity(req.user.id, 'CATEGORY_DELETED', 'categories', req.params.id);
   noContent(res);
 });
 
@@ -100,7 +100,7 @@ export const createSupplier = asyncHandler(async (req, res) => {
     is_active: b.isActive,
   }).select().single();
   if (error) throw new ApiError(500, error.message);
-  await logActivity(req.user.id, 'create_supplier', 'suppliers', data.supplier_id);
+  await logActivity(req.user.id, 'SUPPLIER_CREATED', 'suppliers', data.supplier_id, { name: data.supplier_name });
   created(res, data);
 });
 
@@ -118,7 +118,7 @@ export const updateSupplier = asyncHandler(async (req, res) => {
     .from('suppliers').update(patch).eq('supplier_id', req.params.id).select().maybeSingle();
   if (error) throw new ApiError(500, error.message);
   if (!data) throw ApiError.notFound('Supplier not found');
-  await logActivity(req.user.id, 'update_supplier', 'suppliers', req.params.id, patch);
+  await logActivity(req.user.id, 'SUPPLIER_UPDATED', 'suppliers', req.params.id, patch);
   ok(res, data);
 });
 
@@ -130,6 +130,6 @@ export const deleteSupplier = asyncHandler(async (req, res) => {
 
   const { error } = await supabaseAdmin.from('suppliers').delete().eq('supplier_id', req.params.id);
   if (error) throw new ApiError(500, error.message);
-  await logActivity(req.user.id, 'delete_supplier', 'suppliers', req.params.id);
+  await logActivity(req.user.id, 'SUPPLIER_DELETED', 'suppliers', req.params.id);
   noContent(res);
 });
