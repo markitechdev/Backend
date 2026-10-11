@@ -10,6 +10,26 @@ const SELECT = `
   role:roles ( role_id, role_code, role_name )
 `;
 
+/**
+ * Filters and sanitizes user records to prevent exposure of sensitive personal contact info
+ * to non-administrative staff.
+ */
+const serializeUser = (user, callerRole) => {
+  if (!user) return null;
+  const isPrivileged = callerRole === 'super_admin' || callerRole === 'staff_admin';
+  return {
+    userId: user.user_id,
+    fullName: user.full_name,
+    username: user.username,
+    email: isPrivileged ? user.email : user.email?.replace(/(.{2})(.*)(?=@)/, (_m, a, b) => a + '*'.repeat(Math.max(b.length, 3))),
+    position: user.position,
+    isActive: user.is_active,
+    createdAt: user.created_at,
+    contactNumber: isPrivileged ? user.contact_number : null,
+    role: user.role,
+  };
+};
+
 export const createUserSchema = z.object({
   fullName: z.string().min(2),
   username: z.string().min(3).regex(/^[a-zA-Z0-9._-]+$/, 'Letters, numbers, dot, dash and underscore only'),
@@ -41,7 +61,8 @@ export const listUsers = asyncHandler(async (req, res) => {
   const { data, error } = await q;
   if (error) throw new ApiError(500, error.message);
 
-  const rows = role ? data.filter((u) => u.role?.role_code === role) : data;
+  const rows = (role ? data.filter((u) => u.role?.role_code === role) : data)
+    .map((u) => serializeUser(u, req.user.role?.role_code));
   ok(res, rows);
 });
 
@@ -50,7 +71,7 @@ export const getUser = asyncHandler(async (req, res) => {
   const { data, error } = await supabaseAdmin
     .from('users').select(SELECT).eq('user_id', req.params.id).single();
   if (error || !data) throw ApiError.notFound('User not found');
-  ok(res, data);
+  ok(res, serializeUser(data, req.user.role?.role_code));
 });
 
 /**
@@ -88,7 +109,7 @@ export const createUser = asyncHandler(async (req, res) => {
   }
 
   await logActivity(req.user.id, 'create_user', 'users', data.user_id, { role: roleRow.role_code });
-  created(res, data);
+  created(res, serializeUser(data, req.user.role?.role_code));
 });
 
 /** PATCH /api/users/:id */
@@ -161,7 +182,7 @@ export const updateUser = asyncHandler(async (req, res) => {
   if (!data) throw ApiError.notFound('User not found');
 
   await logActivity(req.user.id, 'update_user', 'users', req.params.id, patch);
-  ok(res, data);
+  ok(res, serializeUser(data, req.user.role?.role_code));
 });
 
 /** DELETE /api/users/:id - removes the auth account; the profile cascades. */
