@@ -134,6 +134,11 @@ export const updateProduct = asyncHandler(async (req, res) => {
   if (b.expirationDate !== undefined) productPatch.expiration_date = b.expirationDate || null;
   if (b.status         !== undefined) productPatch.status          = b.status;
 
+  // Verify product exists before updating
+  const { data: existing } = await supabaseAdmin
+    .from('products').select('product_id, product_name').eq('product_id', req.params.id).single();
+  if (!existing) throw ApiError.notFound('Product not found');
+
   if (Object.keys(productPatch).length) {
     const { error } = await supabaseAdmin
       .from('products').update(productPatch).eq('product_id', req.params.id);
@@ -166,8 +171,12 @@ export const updateProduct = asyncHandler(async (req, res) => {
 
 /** DELETE /api/products/:id */
 export const deleteProduct = asyncHandler(async (req, res) => {
+  const { data: existing } = await supabaseAdmin
+    .from('products').select('product_id, product_name').eq('product_id', req.params.id).single();
+  if (!existing) throw ApiError.notFound('Product not found');
+
   const { error } = await supabaseAdmin.from('products').delete().eq('product_id', req.params.id);
   if (error) throw new ApiError(500, error.message);
-  await logActivity(req.user.id, 'delete_product', 'products', req.params.id);
+  await logActivity(req.user.id, 'delete_product', 'products', req.params.id, { name: existing.product_name });
   noContent(res);
 });

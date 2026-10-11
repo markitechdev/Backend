@@ -69,6 +69,10 @@ export const alertStatusSchema = z.object({
 
 /** PATCH /api/alerts/:id */
 export const updateAlertStatus = asyncHandler(async (req, res) => {
+  const { data: existing } = await supabaseAdmin
+    .from('alerts').select('alert_id, alert_status').eq('alert_id', req.params.id).single();
+  if (!existing) throw ApiError.notFound('Alert not found');
+
   const patch = { alert_status: req.body.status };
   if (req.body.status === 'resolved') {
     patch.resolved_at = new Date().toISOString();

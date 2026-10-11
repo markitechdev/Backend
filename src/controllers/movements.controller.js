@@ -53,6 +53,14 @@ export const createMovement = asyncHandler(async (req, res) => {
     .from('products').select('product_id, product_name').eq('product_id', productId).single();
   if (!product) throw ApiError.notFound('Product not found');
 
+  const { data: invCheck } = await supabaseAdmin
+    .from('inventory').select('current_stock').eq('product_id', productId).single();
+  if (!invCheck) throw ApiError.badRequest('This product has no inventory record yet.');
+
+  if (['stock_out', 'damaged', 'missing'].includes(movementType) && invCheck.current_stock < quantity) {
+    throw ApiError.badRequest(`Insufficient stock on hand (current: ${invCheck.current_stock}, requested: ${quantity})`);
+  }
+
   const { data, error } = await supabaseAdmin.from('stock_movements').insert({
     product_id: productId,
     movement_type: movementType,
