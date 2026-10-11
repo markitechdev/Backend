@@ -6,7 +6,56 @@ import { ok, created } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
 import { invalidateAllUserProfiles } from '../utils/cache.js';
 
-/** GET /api/roles - roles with their permission codes, user counts, and active status. */
+/** Default icon mapping per system role tier */
+export const getDefaultRoleIcon = (roleCode) => {
+  switch (roleCode) {
+    case 'super_admin':
+      return '🛡️';
+    case 'warehouse_admin':
+      return '⚙️';
+    case 'staff_admin':
+      return '👤';
+    case 'finance_admin':
+      return '💰';
+    case 'manager':
+      return '🧭';
+    default:
+      return '🧩';
+  }
+};
+
+/** Parses role metadata (icon, active state, clean description) encoded in description */
+export const parseRoleMetadata = (description, roleCode) => {
+  let raw = description || '';
+  let icon = null;
+  const iconMatch = raw.match(/\[ICON:([^\]]+)\]/);
+  if (iconMatch) {
+    icon = iconMatch[1].trim();
+    raw = raw.replace(/\[ICON:[^\]]+\]\s*/g, '');
+  } else {
+    icon = getDefaultRoleIcon(roleCode);
+  }
+
+  const isDeactivated = raw.startsWith('[DEACTIVATED]');
+  const cleanDescription = raw.replace(/^\[DEACTIVATED\]\s*/, '').trim();
+
+  return {
+    icon,
+    isActive: !isDeactivated,
+    description: cleanDescription,
+  };
+};
+
+/** Serializes role metadata into PostgreSQL description text permanently */
+export const serializeRoleMetadata = ({ icon, isActive, description, roleCode }) => {
+  const chosenIcon = (icon && icon.trim()) ? icon.trim() : getDefaultRoleIcon(roleCode);
+  const cleanDesc = (description || '').trim();
+  const iconTag = `[ICON:${chosenIcon}]`;
+  const deactTag = isActive === false ? '[DEACTIVATED] ' : '';
+  return `${iconTag} ${deactTag}${cleanDesc}`.trim();
+};
+
+/** GET /api/roles - roles with their permission codes, user counts, icon, and active status. */
 export const listRoles = asyncHandler(async (_req, res) => {
   const { data: roles, error } = await supabaseAdmin
     .from('roles')
@@ -17,22 +66,22 @@ export const listRoles = asyncHandler(async (_req, res) => {
   const { data: users } = await supabaseAdmin.from('users').select('role_id, is_active');
 
   ok(res, (roles || []).map((r) => {
-    const isDeactivated = (r.description || '').startsWith('[DEACTIVATED]');
-    const cleanDesc = (r.description || '').replace(/^\[DEACTIVATED\]\s*/, '');
+    const meta = parseRoleMetadata(r.description, r.role_code);
     return {
       roleId: r.role_id,
       roleCode: r.role_code,
       roleName: r.role_name,
-      description: cleanDesc,
+      icon: meta.icon,
+      description: meta.description,
       isSystem: r.is_system,
-      isActive: !isDeactivated,
+      isActive: meta.isActive,
       userCount: (users || []).filter((u) => u.role_id === r.role_id && u.is_active).length,
       permissions: (r.role_permissions || []).map((rp) => rp.permissions).filter(Boolean),
     };
   }));
 });
 
-/** GET /api/roles/:id - retrieve a single role with effective permissions. */
+/** GET /api/roles/:id - retrieve a single role with effective permissions and icon. */
 export const getRole = asyncHandler(async (req, res) => {
   const roleId = Number(req.params.id);
   const { data: role, error } = await supabaseAdmin
@@ -49,16 +98,16 @@ export const getRole = asyncHandler(async (req, res) => {
     .eq('role_id', roleId)
     .eq('is_active', true);
 
-  const isDeactivated = (role.description || '').startsWith('[DEACTIVATED]');
-  const cleanDesc = (role.description || '').replace(/^\[DEACTIVATED\]\s*/, '');
+  const meta = parseRoleMetadata(role.description, role.role_code);
 
   ok(res, {
     roleId: role.role_id,
     roleCode: role.role_code,
     roleName: role.role_name,
-    description: cleanDesc,
+    icon: meta.icon,
+    description: meta.description,
     isSystem: role.is_system,
-    isActive: !isDeactivated,
+    isActive: meta.isActive,
     userCount: count ?? 0,
     permissions: (role.role_permissions || []).map((rp) => rp.permissions).filter(Boolean),
   });
@@ -69,7 +118,7 @@ export const getRoleUsers = asyncHandler(async (req, res) => {
   const roleId = Number(req.params.id);
   const { data: role, error: roleError } = await supabaseAdmin
     .from('roles')
-    .select('role_id, role_code, role_name')
+    .select('role_id, role_code, role_name, description')
     .eq('role_id', roleId)
     .single();
 
@@ -83,11 +132,14 @@ export const getRoleUsers = asyncHandler(async (req, res) => {
 
   if (error) throw new ApiError(500, error.message);
 
+  const meta = parseRoleMetadata(role.description, role.role_code);
+
   ok(res, {
     role: {
       roleId: role.role_id,
       roleCode: role.role_code,
       roleName: role.role_name,
+      icon: meta.icon,
     },
     users: (users || []).map((u) => ({
       userId: u.user_id,
@@ -120,6 +172,8 @@ export const listPermissions = asyncHandler(async (_req, res) => {
 export const createRoleSchema = z.object({
   roleCode: z.string().min(3).regex(/^[a-z_]+$/, 'Lowercase letters and underscores only'),
   roleName: z.string().min(3),
+  icon: z.string().max(8).optional().nullable(),
+  emoji: z.string().max(8).optional().nullable(),
   description: z.string().optional().nullable(),
   permissionIds: z.array(z.coerce.number().int().positive()).default([]),
 });
@@ -131,14 +185,22 @@ export const createRole = asyncHandler(async (req, res) => {
     throw ApiError.forbidden('Only Super Admins can create new system roles');
   }
 
-  const { roleCode, roleName, description, permissionIds } = req.body;
+  const { roleCode, roleName, description, icon, emoji, permissionIds } = req.body;
   if (roleCode === 'super_admin') {
     throw ApiError.badRequest('Cannot create duplicate super_admin role');
   }
 
+  const roleIcon = icon || emoji || getDefaultRoleIcon(roleCode);
+  const serializedDesc = serializeRoleMetadata({
+    icon: roleIcon,
+    isActive: true,
+    description,
+    roleCode,
+  });
+
   const { data: role, error } = await supabaseAdmin
     .from('roles')
-    .insert({ role_code: roleCode, role_name: roleName, description: description ?? null, is_system: false })
+    .insert({ role_code: roleCode, role_name: roleName, description: serializedDesc, is_system: false })
     .select().single();
   if (error) {
     if (error.code === '23505') throw ApiError.conflict('A role with that code already exists');
@@ -153,13 +215,18 @@ export const createRole = asyncHandler(async (req, res) => {
   await logActivity(req.user.id, 'ROLE_CREATED', 'roles', role.role_id, {
     roleCode,
     roleName,
+    icon: roleIcon,
     permissionsCount: permissionIds.length,
   });
+
+  const meta = parseRoleMetadata(role.description, role.role_code);
+
   created(res, {
     roleId: role.role_id,
     roleCode: role.role_code,
     roleName: role.role_name,
-    description: role.description,
+    icon: meta.icon,
+    description: meta.description,
     isSystem: false,
     isActive: true,
   });
@@ -167,11 +234,13 @@ export const createRole = asyncHandler(async (req, res) => {
 
 export const updateRoleSchema = z.object({
   roleName: z.string().min(3).optional(),
+  icon: z.string().max(8).optional().nullable(),
+  emoji: z.string().max(8).optional().nullable(),
   description: z.string().optional().nullable(),
   isActive: z.boolean().optional(),
 });
 
-/** PATCH/PUT /api/roles/:id - edits role name, description, or active status. */
+/** PATCH/PUT /api/roles/:id - edits role name, icon, description, or active status. */
 export const updateRole = asyncHandler(async (req, res) => {
   const callerRole = req.user.role?.role_code;
   if (callerRole !== 'super_admin') {
@@ -187,22 +256,26 @@ export const updateRole = asyncHandler(async (req, res) => {
 
   if (findError || !existing) throw ApiError.notFound('Role not found');
 
-  const { roleName, description, isActive } = req.body;
-  const wasDeactivated = (existing.description || '').startsWith('[DEACTIVATED]');
-  let cleanDesc = description !== undefined
-    ? (description || '')
-    : (existing.description || '').replace(/^\[DEACTIVATED\]\s*/, '');
+  const { roleName, description, icon, emoji, isActive } = req.body;
+  const currentMeta = parseRoleMetadata(existing.description, existing.role_code);
 
   if (isActive === false && existing.is_system) {
     throw ApiError.badRequest('Protected system roles cannot be deactivated');
   }
 
-  let newIsActive = !wasDeactivated;
-  if (isActive !== undefined) {
-    newIsActive = isActive;
-  }
+  const targetIcon = (icon !== undefined || emoji !== undefined)
+    ? (icon || emoji || getDefaultRoleIcon(existing.role_code))
+    : currentMeta.icon;
 
-  const finalDescription = newIsActive ? cleanDesc : `[DEACTIVATED] ${cleanDesc}`.trim();
+  const targetActive = isActive !== undefined ? isActive : currentMeta.isActive;
+  const targetDesc = description !== undefined ? (description || '') : currentMeta.description;
+
+  const finalDescription = serializeRoleMetadata({
+    icon: targetIcon,
+    isActive: targetActive,
+    description: targetDesc,
+    roleCode: existing.role_code,
+  });
 
   const patch = {};
   if (roleName !== undefined) {
@@ -225,15 +298,17 @@ export const updateRole = asyncHandler(async (req, res) => {
 
   invalidateAllUserProfiles();
 
-  if (isActive !== undefined && isActive !== !wasDeactivated) {
+  if (isActive !== undefined && isActive !== currentMeta.isActive) {
     const action = isActive ? 'ROLE_ACTIVATED' : 'ROLE_DEACTIVATED';
     await logActivity(req.user.id, action, 'roles', roleId, {
       roleCode: existing.role_code,
       roleName: patch.role_name || existing.role_name,
+      icon: targetIcon,
     });
   } else {
     await logActivity(req.user.id, 'ROLE_UPDATED', 'roles', roleId, {
       roleCode: existing.role_code,
+      icon: targetIcon,
       changes: patch,
     });
   }
@@ -244,13 +319,16 @@ export const updateRole = asyncHandler(async (req, res) => {
     .eq('role_id', roleId)
     .single();
 
+  const updatedMeta = parseRoleMetadata(updated.description, updated.role_code);
+
   ok(res, {
     roleId: updated.role_id,
     roleCode: updated.role_code,
     roleName: updated.role_name,
-    description: cleanDesc,
+    icon: updatedMeta.icon,
+    description: updatedMeta.description,
     isSystem: updated.is_system,
-    isActive: newIsActive,
+    isActive: updatedMeta.isActive,
     permissions: (updated.role_permissions || []).map((rp) => rp.permissions).filter(Boolean),
   });
 });

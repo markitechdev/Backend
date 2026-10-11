@@ -5,19 +5,21 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok, created, noContent, paginated } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
 import { invalidateUserProfile } from '../utils/cache.js';
+import { parseRoleMetadata } from './roles.controller.js';
 
 const SELECT = `
   user_id, full_name, username, email, contact_number, position, is_active, created_at,
-  role:roles ( role_id, role_code, role_name )
+  role:roles ( role_id, role_code, role_name, description )
 `;
 
 /**
  * Filters and sanitizes user records to prevent exposure of sensitive personal contact info
- * to non-administrative staff.
+ * to non-administrative staff. Attaches structured visual role metadata (icon, active state).
  */
 const serializeUser = (user, callerRole) => {
   if (!user) return null;
   const isPrivileged = callerRole === 'super_admin' || callerRole === 'staff_admin';
+  const roleMeta = user.role ? parseRoleMetadata(user.role.description, user.role.role_code) : null;
   return {
     userId: user.user_id,
     fullName: user.full_name,
@@ -27,7 +29,13 @@ const serializeUser = (user, callerRole) => {
     isActive: user.is_active,
     createdAt: user.created_at,
     contactNumber: isPrivileged ? user.contact_number : null,
-    role: user.role,
+    role: user.role ? {
+      roleId: user.role.role_id,
+      roleCode: user.role.role_code,
+      roleName: user.role.role_name,
+      icon: roleMeta?.icon || '👤',
+      isActive: roleMeta?.isActive ?? true,
+    } : null,
   };
 };
 
