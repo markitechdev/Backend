@@ -1,4 +1,4 @@
-﻿# Development Backlog
+# Development Backlog
 
 **Author:** jhnyz (Project Manager)  
 **Status:** Approved for Backlog Scheduling  
@@ -12,7 +12,7 @@
 - **Repository:** Backend
 - **Priority:** P0
 - **Owner:** Backend Developer
-- **Status:** Backlog
+- **Status:** FOR QA
 - **Dependencies:** None
 - **Acceptance Criteria:**
   - Non-super-admin accounts cannot invoke `POST /api/users/:id/password` targeting Super Admin accounts.
@@ -28,7 +28,7 @@
 - **Repository:** Backend
 - **Priority:** P0
 - **Owner:** Backend Developer
-- **Status:** Backlog
+- **Status:** FOR QA
 - **Dependencies:** None
 - **Acceptance Criteria:**
   - `PATCH /api/users/:id` rejects requests assigning `role_id` of Super Admin unless requesting caller is an active Super Admin.
@@ -44,7 +44,7 @@
 - **Repository:** Backend
 - **Priority:** P0
 - **Owner:** Backend Developer
-- **Status:** Backlog
+- **Status:** FOR QA
 - **Dependencies:** None
 - **Acceptance Criteria:**
   - Data schema supports organizational or tenant boundaries (`tenant_id`/`org_id`).
@@ -60,7 +60,7 @@
 - **Repository:** Backend
 - **Priority:** P1
 - **Owner:** Backend Developer
-- **Status:** Backlog
+- **Status:** FOR QA
 - **Dependencies:** None
 - **Acceptance Criteria:**
   - `POST /api/auth/logout` calls Supabase auth admin signOut or token revocation service.
@@ -76,7 +76,7 @@
 - **Repository:** Backend
 - **Priority:** P1
 - **Owner:** Backend Developer
-- **Status:** Backlog
+- **Status:** FOR QA
 - **Dependencies:** None
 - **Acceptance Criteria:**
   - `GET /api/roles` requires `roles.view` or `roles.manage` permission.
@@ -156,7 +156,7 @@
 - **Repository:** Backend
 - **Priority:** P2
 - **Owner:** Backend Developer
-- **Status:** Backlog
+- **Status:** FOR QA
 - **Dependencies:** Backlog Item 4
 - **Acceptance Criteria:**
   - `authenticate.js` uses an in-memory cache (TTL 60 seconds) for profile and permissions.

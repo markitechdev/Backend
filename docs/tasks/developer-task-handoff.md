@@ -1,4 +1,4 @@
-﻿# Project Management: Developer Task Handoff & Implementation Sequence
+# Project Management: Developer Task Handoff & Implementation Sequence
 
 **Author:** jhnyz (Project Manager)  
 **Classification:** Engineering Handoff Package & Sprint Dispatch  
@@ -24,7 +24,7 @@ Developers must observe the following procedural rules:
 - **Priority:** P0 (Critical)
 - **QA Source:** `docs/qa/data-isolation.md` (Findings 1, 2)
 - **Owner:** Backend Developer
-- **Current Status:** READY
+- **Current Status:** FOR QA
 - **Dependencies:** None
 - **Requirements:**
   - In `users.controller.js` `resetPassword`: Check target user's role. If target is `super_admin`, require caller to also be `super_admin`.
@@ -43,7 +43,7 @@ Developers must observe the following procedural rules:
 - **Priority:** P1 (High)
 - **QA Source:** `docs/qa/backend-permissions.md` (Finding 1)
 - **Owner:** Backend Developer
-- **Current Status:** READY
+- **Current Status:** FOR QA
 - **Dependencies:** Order 1
 - **Requirements:**
   - Add `requirePermission('roles.view')` or `requirePermission('roles.manage')` to `GET /api/roles`.
@@ -61,7 +61,7 @@ Developers must observe the following procedural rules:
 - **Priority:** P1 (High)
 - **QA Source:** `docs/qa/backend-permissions.md` (Finding 2)
 - **Owner:** Backend Developer
-- **Current Status:** READY
+- **Current Status:** FOR QA
 - **Dependencies:** Order 2
 - **Requirements:**
   - In `roles.controller.js` `updateRolePermissions`: Require caller to be Super Admin (`requireRole('super_admin')`).
@@ -79,7 +79,7 @@ Developers must observe the following procedural rules:
 - **Priority:** P1 (High)
 - **QA Source:** `docs/qa/super-admin-auth.md` (Finding 1)
 - **Owner:** Backend Developer
-- **Current Status:** READY
+- **Current Status:** FOR QA
 - **Dependencies:** None
 - **Requirements:**
   - Call Supabase Auth admin signOut API on `POST /api/auth/logout`.
@@ -136,7 +136,7 @@ Developers must observe the following procedural rules:
 - **Priority:** P2 (Medium)
 - **QA Source:** `docs/qa/rendering-and-caching.md`, `api-performance.md`
 - **Owner:** Both
-- **Current Status:** READY
+- **Current Status:** FOR QA (Backend complete, Frontend pending)
 - **Dependencies:** Order 4
 - **Requirements:**
   - Frontend: Add Pinia SWR cache for dashboard; debounce search inputs (350ms); sync filters to URL query.
