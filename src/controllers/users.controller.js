@@ -6,6 +6,9 @@ import { ok, created, noContent, paginated } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
 import { invalidateUserProfile } from '../utils/cache.js';
 import { parseRoleMetadata } from './roles.controller.js';
+import { isSuperAdminUser, userCan } from '../middleware/authorize.js';
+import { safeSearchTerm } from '../utils/query.js';
+import { invalidateDashboardCache } from '../utils/cache.js';
 
 const SELECT = `
   user_id, full_name, username, email, contact_number, position, is_active, created_at,
@@ -13,18 +16,21 @@ const SELECT = `
 `;
 
 /**
- * Filters and sanitizes user records to prevent exposure of sensitive personal contact info
- * to non-administrative staff. Attaches structured visual role metadata (icon, active state).
+ * Filters and sanitizes user records. Full email and contact number are only
+ * returned to callers who manage accounts (users.manage) or are Super Admin;
+ * view-only callers get a masked email and no phone number.
  */
-const serializeUser = (user, callerRole) => {
+const maskEmail = (email) => email?.replace(/(.{2})(.*)(?=@)/, (_m, a, b) => a + '*'.repeat(Math.max(b.length, 3)));
+
+const serializeUser = (user, caller) => {
   if (!user) return null;
-  const isPrivileged = callerRole === 'super_admin' || callerRole === 'staff_admin';
+  const isPrivileged = userCan(caller, 'users.manage');
   const roleMeta = user.role ? parseRoleMetadata(user.role.description, user.role.role_code) : null;
   return {
     userId: user.user_id,
     fullName: user.full_name,
     username: user.username,
-    email: isPrivileged ? user.email : user.email?.replace(/(.{2})(.*)(?=@)/, (_m, a, b) => a + '*'.repeat(Math.max(b.length, 3))),
+    email: isPrivileged ? user.email : maskEmail(user.email),
     position: user.position,
     isActive: user.is_active,
     createdAt: user.created_at,
@@ -38,6 +44,9 @@ const serializeUser = (user, callerRole) => {
     } : null,
   };
 };
+
+/** Super Admin accounts are invisible to everyone except other Super Admins. */
+const visibleTo = (caller) => (u) => isSuperAdminUser(caller) || u.role?.role_code !== 'super_admin';
 
 export const createUserSchema = z.object({
   fullName: z.string().min(2),
@@ -60,7 +69,8 @@ export const updateUserSchema = z.object({
 
 /** GET /api/users */
 export const listUsers = asyncHandler(async (req, res) => {
-  const { role, search, active, page, limit } = req.query;
+  const { role, active, page, limit } = req.query;
+  const search = safeSearchTerm(req.query.search);
   let q = supabaseAdmin.from('users').select(SELECT).order('created_at', { ascending: false });
 
   if (active === 'true')  q = q.eq('is_active', true);
@@ -70,8 +80,10 @@ export const listUsers = asyncHandler(async (req, res) => {
   const { data, error } = await q;
   if (error) throw new ApiError(500, error.message);
 
-  const rows = (role ? data.filter((u) => u.role?.role_code === role) : data)
-    .map((u) => serializeUser(u, req.user.role?.role_code));
+  const rows = (data || [])
+    .filter(visibleTo(req.user))
+    .filter((u) => !role || u.role?.role_code === role)
+    .map((u) => serializeUser(u, req.user));
 
   if (page || limit) {
     const pageNum = Math.max(1, Number(page) || 1);
@@ -89,8 +101,9 @@ export const getUser = asyncHandler(async (req, res) => {
   const { data, error } = await supabaseAdmin
     .from('users').select(SELECT).eq('user_id', req.params.id).maybeSingle();
   if (error) throw new ApiError(500, error.message);
-  if (!data) throw ApiError.notFound('User not found');
-  ok(res, serializeUser(data, req.user.role?.role_code));
+  // Do not even confirm that a Super Admin account exists to non-super-admins
+  if (!data || !visibleTo(req.user)(data)) throw ApiError.notFound('User not found');
+  ok(res, serializeUser(data, req.user));
 });
 
 /**
@@ -135,6 +148,7 @@ export const createUser = asyncHandler(async (req, res) => {
     throw new ApiError(500, error.message);
   }
 
+  invalidateDashboardCache();
   await logActivity(req.user.id, 'USER_CREATED', 'users', data.user_id, {
     role: roleRow.role_code,
     email: data.email,
@@ -146,7 +160,7 @@ export const createUser = asyncHandler(async (req, res) => {
     roleCode: roleRow.role_code,
     user: data.full_name,
   });
-  created(res, serializeUser(data, req.user.role?.role_code));
+  created(res, serializeUser(data, req.user));
 });
 
 /** PATCH /api/users/:id */
@@ -164,9 +178,9 @@ export const updateUser = asyncHandler(async (req, res) => {
   // Fetch target user to inspect role tier
   const { data: target, error: targetError } = await supabaseAdmin
     .from('users')
-    .select('user_id, role:roles(role_id, role_code)')
+    .select('user_id, username, role:roles(role_id, role_code)')
     .eq('user_id', req.params.id)
-    .single();
+    .maybeSingle();
 
   if (targetError || !target) throw ApiError.notFound('User not found');
 
@@ -221,6 +235,7 @@ export const updateUser = asyncHandler(async (req, res) => {
   if (!data) throw ApiError.notFound('User not found');
 
   invalidateUserProfile(req.params.id);
+  invalidateDashboardCache();
   if (patch.is_active !== undefined) {
     const act = patch.is_active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED';
     await logActivity(req.user.id, act, 'users', req.params.id, {
@@ -246,7 +261,7 @@ export const updateUser = asyncHandler(async (req, res) => {
     });
   }
 
-  ok(res, serializeUser(data, req.user.role?.role_code));
+  ok(res, serializeUser(data, req.user));
 });
 
 /** DELETE /api/users/:id - removes the auth account; the profile cascades. */
@@ -255,9 +270,9 @@ export const deleteUser = asyncHandler(async (req, res) => {
 
   const { data: target } = await supabaseAdmin
     .from('users')
-    .select('user_id, role:roles(role_code)')
+    .select('user_id, username, role:roles(role_code)')
     .eq('user_id', req.params.id)
-    .single();
+    .maybeSingle();
 
   if (!target) throw ApiError.notFound('User not found');
 
@@ -269,6 +284,7 @@ export const deleteUser = asyncHandler(async (req, res) => {
   if (error) throw new ApiError(500, error.message);
 
   invalidateUserProfile(req.params.id);
+  invalidateDashboardCache();
   await logActivity(req.user.id, 'USER_DELETED', 'users', req.params.id, {
     targetUsername: target.username,
   });
@@ -282,9 +298,9 @@ export const resetPassword = asyncHandler(async (req, res) => {
   // Inspect target user tier to prevent IDOR against Super Admins
   const { data: target, error: targetError } = await supabaseAdmin
     .from('users')
-    .select('user_id, role:roles(role_code)')
+    .select('user_id, username, role:roles(role_code)')
     .eq('user_id', req.params.id)
-    .single();
+    .maybeSingle();
 
   if (targetError || !target) throw ApiError.notFound('User not found');
 

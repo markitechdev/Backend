@@ -5,6 +5,20 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok, created } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
 import { invalidateAllUserProfiles } from '../utils/cache.js';
+import { isSuperAdminUser, userCan } from '../middleware/authorize.js';
+
+/** Confirms every permission id exists; returns the de-duplicated id list. */
+const validatePermissionIds = async (ids = []) => {
+  const unique = [...new Set(ids.map(Number))];
+  if (!unique.length) return unique;
+  const { data, error } = await supabaseAdmin
+    .from('permissions').select('permission_id').in('permission_id', unique);
+  if (error) throw new ApiError(500, error.message);
+  const found = new Set((data || []).map((p) => p.permission_id));
+  const unknown = unique.filter((id) => !found.has(id));
+  if (unknown.length) throw ApiError.badRequest(`Unknown permission id(s): ${unknown.join(', ')}`);
+  return unique;
+};
 
 /**
  * Visual metadata icon mapping per job role tier.
@@ -76,7 +90,7 @@ export const serializeRoleMetadata = ({ icon, isActive, description, roleCode })
 };
 
 /** GET /api/roles - roles with their permission codes, user counts, icon, and active status. */
-export const listRoles = asyncHandler(async (_req, res) => {
+export const listRoles = asyncHandler(async (req, res) => {
   const { data: roles, error } = await supabaseAdmin
     .from('roles')
     .select('role_id, role_code, role_name, description, is_system, role_permissions ( permissions ( permission_id, permission_code, module, description ) )')
@@ -84,8 +98,10 @@ export const listRoles = asyncHandler(async (_req, res) => {
   if (error) throw new ApiError(500, error.message);
 
   const { data: users } = await supabaseAdmin.from('users').select('role_id, is_active');
+  const callerIsSuper = isSuperAdminUser(req.user);
 
-  ok(res, (roles || []).map((r) => {
+  // The Super Admin tier is not part of the tenant-facing role catalogue
+  ok(res, (roles || []).filter((r) => callerIsSuper || r.role_code !== 'super_admin').map((r) => {
     const meta = parseRoleMetadata(r.description, r.role_code);
     return {
       roleId: r.role_id,
@@ -111,6 +127,7 @@ export const getRole = asyncHandler(async (req, res) => {
     .single();
 
   if (error || !role) throw ApiError.notFound('Role not found');
+  if (role.role_code === 'super_admin' && !isSuperAdminUser(req.user)) throw ApiError.notFound('Role not found');
 
   const { count } = await supabaseAdmin
     .from('users')
@@ -143,6 +160,9 @@ export const getRoleUsers = asyncHandler(async (req, res) => {
     .single();
 
   if (roleError || !role) throw ApiError.notFound('Role not found');
+  if (role.role_code === 'super_admin' && !isSuperAdminUser(req.user)) {
+    throw ApiError.notFound('Role not found');
+  }
 
   const { data: users, error } = await supabaseAdmin
     .from('users')
@@ -165,7 +185,7 @@ export const getRoleUsers = asyncHandler(async (req, res) => {
       userId: u.user_id,
       fullName: u.full_name,
       username: u.username,
-      email: u.email,
+      email: userCan(req.user, 'users.manage') ? u.email : u.email?.replace(/(.{2})(.*)(?=@)/, (_m, a, b) => a + '*'.repeat(Math.max(b.length, 3))),
       position: u.position,
       isActive: u.is_active,
       createdAt: u.created_at,
@@ -205,10 +225,11 @@ export const createRole = asyncHandler(async (req, res) => {
     throw ApiError.forbidden('Only Super Admins can create new system roles');
   }
 
-  const { roleCode, roleName, description, icon, emoji, permissionIds } = req.body;
+  const { roleCode, roleName, description, icon, emoji } = req.body;
   if (roleCode === 'super_admin') {
     throw ApiError.badRequest('Cannot create duplicate super_admin role');
   }
+  const permissionIds = await validatePermissionIds(req.body.permissionIds);
 
   const roleIcon = icon || emoji || getDefaultRoleIcon(roleCode);
   const serializedDesc = serializeRoleMetadata({
@@ -228,8 +249,13 @@ export const createRole = asyncHandler(async (req, res) => {
   }
 
   if (permissionIds.length) {
-    await supabaseAdmin.from('role_permissions')
+    const { error: permError } = await supabaseAdmin.from('role_permissions')
       .insert(permissionIds.map((id) => ({ role_id: role.role_id, permission_id: id })));
+    if (permError) {
+      // Do not leave a half-created role behind
+      await supabaseAdmin.from('roles').delete().eq('role_id', role.role_id);
+      throw new ApiError(500, permError.message);
+    }
   }
 
   await logActivity(req.user.id, 'ROLE_CREATED', 'roles', role.role_id, {
@@ -365,20 +391,35 @@ export const updateRolePermissions = asyncHandler(async (req, res) => {
   }
 
   const roleId = Number(req.params.id);
-  const { permissionIds } = req.body;
+  if (!Number.isInteger(roleId) || roleId <= 0) throw ApiError.badRequest('Role ID must be a positive integer');
 
   const { data: role } = await supabaseAdmin
-    .from('roles').select('role_id, role_code').eq('role_id', roleId).single();
+    .from('roles').select('role_id, role_code').eq('role_id', roleId).maybeSingle();
   if (!role) throw ApiError.notFound('Role not found');
   if (role.role_code === 'super_admin') {
     throw ApiError.forbidden('Super Admin permissions cannot be reduced or modified.');
   }
 
-  await supabaseAdmin.from('role_permissions').delete().eq('role_id', roleId);
+  // Validate first: an unknown id used to wipe the role's permissions and then fail.
+  const permissionIds = await validatePermissionIds(req.body.permissionIds);
+
+  const { data: previous } = await supabaseAdmin
+    .from('role_permissions').select('permission_id').eq('role_id', roleId);
+
+  const { error: delError } = await supabaseAdmin.from('role_permissions').delete().eq('role_id', roleId);
+  if (delError) throw new ApiError(500, delError.message);
+
   if (permissionIds.length) {
     const { error } = await supabaseAdmin.from('role_permissions')
       .insert(permissionIds.map((id) => ({ role_id: roleId, permission_id: id })));
-    if (error) throw new ApiError(500, error.message);
+    if (error) {
+      // Restore the previous permission set so the role is never left empty by a failure
+      if (previous?.length) {
+        await supabaseAdmin.from('role_permissions')
+          .insert(previous.map((p) => ({ role_id: roleId, permission_id: p.permission_id })));
+      }
+      throw new ApiError(500, error.message);
+    }
   }
 
   invalidateAllUserProfiles();
