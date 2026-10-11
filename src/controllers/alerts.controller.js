@@ -73,6 +73,10 @@ export const updateAlertStatus = asyncHandler(async (req, res) => {
     .from('alerts').select('alert_id, alert_status').eq('alert_id', req.params.id).single();
   if (!existing) throw ApiError.notFound('Alert not found');
 
+  if (existing.alert_status === req.body.status) {
+    return ok(res, { alert_id: existing.alert_id, alert_status: existing.alert_status, message: `Alert is already ${existing.alert_status}.` });
+  }
+
   const patch = { alert_status: req.body.status };
   if (req.body.status === 'resolved') {
     patch.resolved_at = new Date().toISOString();
