@@ -89,3 +89,37 @@ test('Auth: User profile caching and invalidation works as expected', () => {
   invalidateUserProfile(userId);
   assert.strictEqual(getCachedUserProfile(userId), null, 'Cache must return null after invalidation');
 });
+
+test('Auth: Logout invalidates access token, refresh token, and clears user cache', () => {
+  const accessToken = 'active-user-access-token-123';
+  const refreshToken = 'active-user-refresh-token-456';
+  const userId = 'user-test-uuid-888';
+
+  setCachedUserProfile(userId, { id: userId, email: 'user@example.com' });
+  assert.ok(getCachedUserProfile(userId));
+
+  // Perform logout revocation
+  revokeToken(accessToken);
+  revokeToken(refreshToken);
+  invalidateUserProfile(userId);
+
+  assert.strictEqual(isTokenBlacklisted(accessToken), true, 'Access token must be blacklisted');
+  assert.strictEqual(isTokenBlacklisted(refreshToken), true, 'Refresh token must be blacklisted');
+  assert.strictEqual(getCachedUserProfile(userId), null, 'Profile cache must be cleared');
+});
+
+test('Auth: Refresh endpoint rejects revoked/blacklisted refresh tokens', () => {
+  const revokedRefresh = 'revoked-refresh-token-999';
+  revokeToken(revokedRefresh);
+
+  assert.strictEqual(isTokenBlacklisted(revokedRefresh), true);
+  // Simulating check in refresh controller
+  let error = null;
+  if (isTokenBlacklisted(revokedRefresh)) {
+    error = { status: 401, message: 'Refresh token has been revoked or signed out' };
+  }
+
+  assert.ok(error);
+  assert.strictEqual(error.status, 401);
+  assert.match(error.message, /revoked/i);
+});

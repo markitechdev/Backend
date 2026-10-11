@@ -4,7 +4,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
-import { revokeToken } from '../utils/tokenBlacklist.js';
+import { revokeToken, isTokenRevoked } from '../utils/tokenBlacklist.js';
 import { invalidateUserProfile } from '../utils/cache.js';
 
 export const superAdminLoginSchema = z.object({
@@ -112,8 +112,9 @@ export const superAdminMe = asyncHandler(async (req, res) => {
   });
 });
 
-/** POST /api/super-admin/auth/logout - revokes Super Admin session & purges cache */
+/** POST /api/super-admin/auth/logout - revokes Super Admin session, invalidates tokens & cookies & purges cache */
 export const superAdminLogout = asyncHandler(async (req, res) => {
+  const refreshToken = req.body?.refreshToken;
   if (req.accessToken) {
     revokeToken(req.accessToken);
     try {
@@ -122,10 +123,20 @@ export const superAdminLogout = asyncHandler(async (req, res) => {
       // In-memory blacklist ensures revocation
     }
   }
+  if (refreshToken) {
+    revokeToken(refreshToken);
+  }
   if (req.user?.id) {
     invalidateUserProfile(req.user.id);
   }
-  await logActivity(req.user.id, 'super_admin_logout', 'auth', req.user.id, {
+
+  // Clear HTTP-only authentication cookies if present
+  res.clearCookie('accessToken', { path: '/', httpOnly: true, sameSite: 'lax' });
+  res.clearCookie('refreshToken', { path: '/', httpOnly: true, sameSite: 'lax' });
+  res.clearCookie('sb-access-token', { path: '/' });
+  res.clearCookie('sb-refresh-token', { path: '/' });
+
+  await logActivity(req.user?.id || 'unknown', 'SUPER_ADMIN_LOGOUT', 'auth', req.user?.id || null, {
     endpoint: '/api/super-admin/auth/logout',
     revoked: true,
   });
@@ -136,12 +147,31 @@ export const superAdminRefreshSchema = z.object({ refreshToken: z.string().min(1
 
 /** POST /api/super-admin/auth/refresh */
 export const superAdminRefresh = asyncHandler(async (req, res) => {
+  const { refreshToken } = req.body;
+  if (isTokenRevoked(refreshToken)) {
+    throw ApiError.unauthorized('Refresh token has been revoked or signed out');
+  }
+
   const { data, error } = await supabaseAnon.auth.refreshSession({
-    refresh_token: req.body.refreshToken,
+    refresh_token: refreshToken,
   });
   if (error || !data?.session) {
     throw ApiError.unauthorized('Session could not be refreshed');
   }
+
+  // Verify caller is an active Super Admin
+  const { data: profile } = await supabaseAdmin
+    .from('users')
+    .select('user_id, is_active, role:roles ( role_code )')
+    .eq('user_id', data.session.user.id)
+    .single();
+
+  if (!profile || !profile.is_active || profile.role?.role_code !== 'super_admin') {
+    if (data.session.access_token) revokeToken(data.session.access_token);
+    if (data.session.refresh_token) revokeToken(data.session.refresh_token);
+    throw ApiError.forbidden('Access denied: Restricted to active Super Admin');
+  }
+
   ok(res, {
     accessToken: data.session.access_token,
     refreshToken: data.session.refresh_token,
