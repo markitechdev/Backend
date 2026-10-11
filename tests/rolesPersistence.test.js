@@ -74,11 +74,15 @@ test('Roles: Update schema correctly handles activation, icon, and renaming', ()
 });
 
 test('Roles: Visual metadata system assigns correct icons and persists round-trip', () => {
-  // Default system tier icons
+  // Default system tier icons per responsibility specification
   assert.strictEqual(getDefaultRoleIcon('super_admin'), '🛡️');
-  assert.strictEqual(getDefaultRoleIcon('warehouse_admin'), '⚙️');
-  assert.strictEqual(getDefaultRoleIcon('staff_admin'), '👤');
-  assert.strictEqual(getDefaultRoleIcon('finance_admin'), '💰');
+  assert.strictEqual(getDefaultRoleIcon('tenant_admin'), '⚙️');
+  assert.strictEqual(getDefaultRoleIcon('warehouse_manager'), '📦');
+  assert.strictEqual(getDefaultRoleIcon('purchasing_officer'), '🛒');
+  assert.strictEqual(getDefaultRoleIcon('staff_manager'), '👥');
+  assert.strictEqual(getDefaultRoleIcon('inventory_analyst'), '📊');
+  assert.strictEqual(getDefaultRoleIcon('auditor'), '🔍');
+  assert.strictEqual(getDefaultRoleIcon('inventory_staff'), '👤');
   assert.strictEqual(getDefaultRoleIcon('custom_role'), '🧩');
 
   // Serialize custom role with icon and description

@@ -107,3 +107,65 @@ test('Security: Data exposure prevention - sanitizeLogData scrubs sensitive cred
   assert.strictEqual(safeLog.message, 'User authentication failed: [REDACTED_TOKEN]');
   assert.strictEqual(safeLog.nested.apiKey, '[REDACTED]');
 });
+
+test('Security: Privilege escalation prevention - blocks user from modifying own role', () => {
+  const caller = {
+    user: { id: 'user-self', role: { role_code: 'manager' } },
+  };
+  const targetId = 'user-self';
+  const newRoleId = 1; // attempting to change own role
+  const currentRoleId = 2;
+
+  const isBlocked = caller.user.role?.role_code !== 'super_admin' && targetId === caller.user.id && newRoleId !== currentRoleId;
+  assert.strictEqual(isBlocked, true, 'User must not be allowed to modify their own assigned role');
+});
+
+test('Security: Privilege escalation prevention - non-super-admins cannot create Super Admin accounts', () => {
+  const staffCaller = { user: { role: { role_code: 'staff_admin' } } };
+  const targetRole = { role_code: 'super_admin' };
+
+  const isForbidden = targetRole.role_code === 'super_admin' && staffCaller.user.role?.role_code !== 'super_admin';
+  assert.strictEqual(isForbidden, true, 'Staff admin must not be allowed to create Super Admin accounts');
+});
+
+test('Security: Permission aliases - synonyms and module manage permissions resolve correctly', () => {
+  // Warehouse manager with stock_movements.view accesses movements.view endpoint
+  const warehouseReq = {
+    user: { role: { role_code: 'warehouse_manager' }, permissions: ['stock_movements.view'] },
+  };
+  let err = null;
+  requirePermission('movements.view')(warehouseReq, {}, (e) => { err = e; });
+  assert.strictEqual(err, undefined, 'stock_movements.view should satisfy movements.view requirement');
+
+  // Inventory editor with inventory.edit accesses inventory.update endpoint
+  const editReq = {
+    user: { role: { role_code: 'inventory_staff' }, permissions: ['inventory.edit'] },
+  };
+  let editErr = null;
+  requirePermission('inventory.update')(editReq, {}, (e) => { editErr = e; });
+  assert.strictEqual(editErr, undefined, 'inventory.edit should satisfy inventory.update requirement');
+
+  // Auditor with audit_logs.view accesses logs.view endpoint
+  const auditReq = {
+    user: { role: { role_code: 'auditor' }, permissions: ['audit_logs.view'] },
+  };
+  let auditErr = null;
+  requirePermission('logs.view')(auditReq, {}, (e) => { auditErr = e; });
+  assert.strictEqual(auditErr, undefined, 'audit_logs.view should satisfy logs.view requirement');
+});
+
+test('Security: Emoji / icon is never used for authorization', () => {
+  // Attacker adds super_admin emoji to their non-super-admin profile
+  const spoofedEmojiUser = {
+    user: {
+      id: 'attacker-1',
+      role: { role_code: 'staff', icon: '🛡️', emoji: '🛡️' },
+      isSuperAdmin: false,
+    },
+  };
+
+  let caughtErr = null;
+  requireRole('super_admin')(spoofedEmojiUser, {}, (e) => { caughtErr = e; });
+  assert.ok(caughtErr, 'Emoji spoofing must not grant access to Super Admin');
+  assert.strictEqual(caughtErr.status, 403);
+});

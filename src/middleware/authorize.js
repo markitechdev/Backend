@@ -1,4 +1,32 @@
-﻿import { ApiError } from '../utils/ApiError.js';
+import { ApiError } from '../utils/ApiError.js';
+
+const PERMISSION_ALIASES = {
+  'movements.view': ['stock_movements.view'],
+  'stock_movements.view': ['movements.view'],
+  'movements.create': ['stock_movements.create'],
+  'stock_movements.create': ['movements.create'],
+  'movements.manage': ['stock_movements.manage'],
+  'stock_movements.manage': ['movements.manage'],
+  'inventory.edit': ['inventory.update'],
+  'inventory.update': ['inventory.edit'],
+  'inventory.manage': ['inventory.update', 'inventory.create', 'inventory.delete'],
+  'audit_logs.view': ['logs.view'],
+  'logs.view': ['audit_logs.view'],
+  'users.edit': ['users.manage'],
+  'users.create': ['users.manage'],
+  'suppliers.edit': ['suppliers.manage'],
+  'suppliers.create': ['suppliers.manage'],
+  'reports.generate': ['reports.view'],
+};
+
+/** Checks whether a permission code or any of its approved aliases is satisfied */
+export const hasUserPermission = (userPerms = [], code) => {
+  if (userPerms.includes(code)) return true;
+  const [module] = code.split('.');
+  if (userPerms.includes(`${module}.manage`) || userPerms.includes('system.manage')) return true;
+  const aliases = PERMISSION_ALIASES[code] || [];
+  return aliases.some((alias) => userPerms.includes(alias));
+};
 
 /** Requires ALL of the listed permission codes. */
 export const requirePermission = (...codes) => (req, _res, next) => {
@@ -6,7 +34,7 @@ export const requirePermission = (...codes) => (req, _res, next) => {
   if (req.user.role?.role_code === 'super_admin') return next();
 
   const userPerms = req.user.permissions || [];
-  const missing = codes.filter((c) => !userPerms.includes(c));
+  const missing = codes.filter((c) => !hasUserPermission(userPerms, c));
   if (missing.length) {
     return next(ApiError.forbidden(`Access denied: Missing required permission (${missing.join(', ')})`));
   }
@@ -19,7 +47,7 @@ export const requireAnyPermission = (...codes) => (req, _res, next) => {
   if (req.user.role?.role_code === 'super_admin') return next();
 
   const userPerms = req.user.permissions || [];
-  if (!codes.some((c) => userPerms.includes(c))) {
+  if (!codes.some((c) => hasUserPermission(userPerms, c))) {
     return next(ApiError.forbidden(`Access denied: Requires at least one permission (${codes.join(', ')})`));
   }
   next();

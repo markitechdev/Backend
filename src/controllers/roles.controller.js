@@ -6,14 +6,34 @@ import { ok, created } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
 import { invalidateAllUserProfiles } from '../utils/cache.js';
 
-/** Default icon mapping per system role tier */
+/**
+ * Visual metadata icon mapping per job role tier.
+ * Emojis are visual metadata ONLY and are NEVER used for authorization.
+ */
 export const getDefaultRoleIcon = (roleCode) => {
   switch (roleCode) {
     case 'super_admin':
       return '🛡️';
-    case 'warehouse_admin':
+    case 'system_admin':
+    case 'tenant_admin':
+    case 'admin':
       return '⚙️';
+    case 'warehouse_manager':
+    case 'warehouse_admin':
+      return '📦';
+    case 'purchasing_officer':
+    case 'buyer':
+      return '🛒';
+    case 'staff_manager':
     case 'staff_admin':
+      return '👥';
+    case 'inventory_analyst':
+      return '📊';
+    case 'auditor':
+      return '🔍';
+    case 'inventory_staff':
+    case 'staff':
+    case 'user':
       return '👤';
     case 'finance_admin':
       return '💰';

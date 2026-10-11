@@ -108,6 +108,11 @@ export const createUser = asyncHandler(async (req, res) => {
     throw ApiError.badRequest(`Role "${roleRow.role_code}" is currently deactivated and cannot be assigned to users.`);
   }
 
+  const callerRole = req.user?.role?.role_code;
+  if (roleRow.role_code === 'super_admin' && callerRole !== 'super_admin') {
+    throw ApiError.forbidden('Only Super Admins can create Super Admin accounts');
+  }
+
   const { data: authUser, error: authError } = await supabaseAdmin.auth.admin.createUser({
     email, password, email_confirm: true,
     user_metadata: { full_name: fullName, username },
@@ -191,12 +196,9 @@ export const updateUser = asyncHandler(async (req, res) => {
       throw ApiError.forbidden('Only Super Admins can assign the Super Admin role');
     }
 
-    // Non-super-admins cannot elevate user accounts above or equal to caller tier
-    if (callerRole !== 'super_admin' && targetRole.role_code === callerRole && req.params.id === req.user.id) {
-      // Self-promotion attempt prevented
-      if (patch.role_id !== target.role?.role_id) {
-        throw ApiError.forbidden('Users cannot modify their own administrative tier');
-      }
+    // Users cannot change their own role (self-role manipulation prevented)
+    if (callerRole !== 'super_admin' && req.params.id === req.user.id && patch.role_id !== target.role?.role_id) {
+      throw ApiError.forbidden('Users cannot modify their own assigned role');
     }
   }
 
