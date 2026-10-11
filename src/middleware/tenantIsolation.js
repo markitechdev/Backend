@@ -13,11 +13,11 @@ export const enforceTenantIsolation = (req, _res, next) => {
   const userTenant = req.user.tenantId || req.user.organizationId || 'default-org';
 
   // Extract requested tenant from headers, query, or body
-  const requestedTenant = req.headers['x-tenant-id'] ||
-    req.headers['x-organization-id'] ||
-    req.query.tenant_id ||
-    req.query.tenantId ||
-    req.query.org_id ||
+  const requestedTenant = req.headers?.['x-tenant-id'] ||
+    req.headers?.['x-organization-id'] ||
+    req.query?.tenant_id ||
+    req.query?.tenantId ||
+    req.query?.org_id ||
     req.body?.tenantId ||
     req.body?.tenant_id;
 
