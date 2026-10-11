@@ -4,6 +4,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
+import { revokeToken } from '../utils/tokenBlacklist.js';
 
 export const loginSchema = z.object({
   email: z.string().email('A valid email is required'),
@@ -72,8 +73,16 @@ export const me = asyncHandler(async (req, res) => {
 
 /** POST /api/auth/logout */
 export const logout = asyncHandler(async (req, res) => {
+  if (req.accessToken) {
+    revokeToken(req.accessToken);
+    try {
+      await supabaseAdmin.auth.admin.signOut(req.accessToken);
+    } catch {
+      // In-memory blacklist ensures immediate revocation
+    }
+  }
   await logActivity(req.user.id, 'logout', 'auth', req.user.id);
-  ok(res, { message: 'Signed out' });
+  ok(res, { message: 'Signed out successfully' });
 });
 
 export const refreshSchema = z.object({ refreshToken: z.string().min(10) });
