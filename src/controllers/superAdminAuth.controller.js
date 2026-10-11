@@ -1,4 +1,4 @@
-﻿import { z } from 'zod';
+import { z } from 'zod';
 import { supabaseAnon, supabaseAdmin } from '../config/supabase.js';
 import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -76,7 +76,7 @@ export const superAdminLogin = asyncHandler(async (req, res) => {
   // Distinct audit logging for successful Super Admin authentication
   await logActivity(
     profile.user_id,
-    'super_admin_login',
+    'SUPER_ADMIN_LOGIN',
     'auth',
     profile.user_id,
     { role: 'super_admin', endpoint: '/api/super-admin/auth/login' }

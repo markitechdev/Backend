@@ -130,7 +130,12 @@ export const createUser = asyncHandler(async (req, res) => {
     throw new ApiError(500, error.message);
   }
 
-  await logActivity(req.user.id, 'create_user', 'users', data.user_id, { role: roleRow.role_code });
+  await logActivity(req.user.id, 'USER_CREATED', 'users', data.user_id, {
+    role: roleRow.role_code,
+    email: data.email,
+    username: data.username,
+    fullName: data.full_name,
+  });
   await logActivity(req.user.id, 'ROLE_ASSIGNED', 'roles', roleId, {
     affectedUserId: data.user_id,
     roleCode: roleRow.role_code,
@@ -214,7 +219,17 @@ export const updateUser = asyncHandler(async (req, res) => {
   if (!data) throw ApiError.notFound('User not found');
 
   invalidateUserProfile(req.params.id);
-  await logActivity(req.user.id, 'update_user', 'users', req.params.id, patch);
+  if (patch.is_active !== undefined) {
+    const act = patch.is_active ? 'USER_ACTIVATED' : 'USER_DEACTIVATED';
+    await logActivity(req.user.id, act, 'users', req.params.id, {
+      username: data.username,
+      fullName: data.full_name,
+    });
+  }
+  await logActivity(req.user.id, 'USER_UPDATED', 'users', req.params.id, {
+    updatedFields: Object.keys(patch),
+    username: data.username,
+  });
 
   if (patch.role_id !== undefined && patch.role_id !== target.role?.role_id && targetRole) {
     await logActivity(req.user.id, 'USER_ROLE_CHANGED', 'users', req.params.id, {
@@ -252,7 +267,9 @@ export const deleteUser = asyncHandler(async (req, res) => {
   if (error) throw new ApiError(500, error.message);
 
   invalidateUserProfile(req.params.id);
-  await logActivity(req.user.id, 'delete_user', 'users', req.params.id);
+  await logActivity(req.user.id, 'USER_DELETED', 'users', req.params.id, {
+    targetUsername: target.username,
+  });
   noContent(res);
 });
 
@@ -286,6 +303,8 @@ export const resetPassword = asyncHandler(async (req, res) => {
   if (error) throw ApiError.badRequest(error.message);
 
   invalidateUserProfile(req.params.id);
-  await logActivity(req.user.id, 'reset_password', 'users', req.params.id);
+  await logActivity(req.user.id, 'USER_PASSWORD_RESET', 'users', req.params.id, {
+    targetUsername: target.username,
+  });
   ok(res, { message: 'Password updated' });
 });
