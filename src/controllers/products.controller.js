@@ -74,8 +74,9 @@ export const listProducts = asyncHandler(async (req, res) => {
 /** GET /api/products/:id */
 export const getProduct = asyncHandler(async (req, res) => {
   const { data, error } = await supabaseAdmin
-    .from('products').select(SELECT).eq('product_id', req.params.id).single();
-  if (error || !data) throw ApiError.notFound('Product not found');
+    .from('products').select(SELECT).eq('product_id', req.params.id).maybeSingle();
+  if (error) throw new ApiError(500, error.message);
+  if (!data) throw ApiError.notFound('Product not found');
 
   const { data: movements } = await supabaseAdmin
     .from('stock_movements')

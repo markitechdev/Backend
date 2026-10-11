@@ -79,8 +79,9 @@ export const listUsers = asyncHandler(async (req, res) => {
 /** GET /api/users/:id */
 export const getUser = asyncHandler(async (req, res) => {
   const { data, error } = await supabaseAdmin
-    .from('users').select(SELECT).eq('user_id', req.params.id).single();
-  if (error || !data) throw ApiError.notFound('User not found');
+    .from('users').select(SELECT).eq('user_id', req.params.id).maybeSingle();
+  if (error) throw new ApiError(500, error.message);
+  if (!data) throw ApiError.notFound('User not found');
   ok(res, serializeUser(data, req.user.role?.role_code));
 });
 

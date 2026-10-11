@@ -38,7 +38,7 @@ export const updateCategory = asyncHandler(async (req, res) => {
   if (req.body.description  !== undefined) patch.description   = req.body.description;
 
   const { data, error } = await supabaseAdmin
-    .from('categories').update(patch).eq('category_id', req.params.id).select().single();
+    .from('categories').update(patch).eq('category_id', req.params.id).select().maybeSingle();
   if (error) throw new ApiError(500, error.message);
   if (!data) throw ApiError.notFound('Category not found');
   await logActivity(req.user.id, 'update_category', 'categories', req.params.id, patch);
@@ -46,6 +46,11 @@ export const updateCategory = asyncHandler(async (req, res) => {
 });
 
 export const deleteCategory = asyncHandler(async (req, res) => {
+  const { data: existing, error: findError } = await supabaseAdmin
+    .from('categories').select('category_id').eq('category_id', req.params.id).maybeSingle();
+  if (findError) throw new ApiError(500, findError.message);
+  if (!existing) throw ApiError.notFound('Category not found');
+
   const { error } = await supabaseAdmin.from('categories').delete().eq('category_id', req.params.id);
   if (error) throw new ApiError(500, error.message);
   await logActivity(req.user.id, 'delete_category', 'categories', req.params.id);
@@ -110,7 +115,7 @@ export const updateSupplier = asyncHandler(async (req, res) => {
   if (b.isActive      !== undefined) patch.is_active      = b.isActive;
 
   const { data, error } = await supabaseAdmin
-    .from('suppliers').update(patch).eq('supplier_id', req.params.id).select().single();
+    .from('suppliers').update(patch).eq('supplier_id', req.params.id).select().maybeSingle();
   if (error) throw new ApiError(500, error.message);
   if (!data) throw ApiError.notFound('Supplier not found');
   await logActivity(req.user.id, 'update_supplier', 'suppliers', req.params.id, patch);
@@ -118,6 +123,11 @@ export const updateSupplier = asyncHandler(async (req, res) => {
 });
 
 export const deleteSupplier = asyncHandler(async (req, res) => {
+  const { data: existing, error: findError } = await supabaseAdmin
+    .from('suppliers').select('supplier_id').eq('supplier_id', req.params.id).maybeSingle();
+  if (findError) throw new ApiError(500, findError.message);
+  if (!existing) throw ApiError.notFound('Supplier not found');
+
   const { error } = await supabaseAdmin.from('suppliers').delete().eq('supplier_id', req.params.id);
   if (error) throw new ApiError(500, error.message);
   await logActivity(req.user.id, 'delete_supplier', 'suppliers', req.params.id);

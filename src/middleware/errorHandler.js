@@ -29,6 +29,11 @@ export const errorHandler = (err, _req, res, _next) => {
     code = 'BAD_REQUEST';
     message = 'Invalid input syntax for parameter type.';
     details = null;
+  } else if (err.code === 'PGRST116') {
+    status = 404;
+    code = 'NOT_FOUND';
+    message = 'Requested resource was not found.';
+    details = null;
   }
 
   // Never leak credentials, raw queries, or stack traces in production
