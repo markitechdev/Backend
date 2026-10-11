@@ -1,5 +1,6 @@
 import { ApiError } from '../utils/ApiError.js';
 import { env } from '../config/env.js';
+import { sanitizeLogData } from '../utils/sanitizeLog.js';
 
 export const notFoundHandler = (req, _res, next) => {
   next(ApiError.notFound(`Route not found: ${req.method} ${req.originalUrl}`));
@@ -32,7 +33,8 @@ export const errorHandler = (err, _req, res, _next) => {
 
   // Never leak credentials, raw queries, or stack traces in production
   if (status >= 500) {
-    console.error('[server-error]', { status, message: err.message, stack: err.stack });
+    const safeError = sanitizeLogData({ status, message: err.message, stack: err.stack });
+    console.error('[server-error]', safeError);
     if (env.nodeEnv === 'production') {
       message = 'Internal server error';
       details = null;
