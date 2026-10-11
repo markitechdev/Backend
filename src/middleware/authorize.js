@@ -28,6 +28,13 @@ export const hasUserPermission = (userPerms = [], code) => {
   return aliases.some((alias) => userPerms.includes(alias));
 };
 
+/** True when the authenticated caller holds the Super Admin role (server-verified). */
+export const isSuperAdminUser = (user) => user?.role?.role_code === 'super_admin';
+
+/** Permission check that also honours the Super Admin bypass. */
+export const userCan = (user, code) =>
+  isSuperAdminUser(user) || hasUserPermission(user?.permissions || [], code);
+
 /** Requires ALL of the listed permission codes. */
 export const requirePermission = (...codes) => (req, _res, next) => {
   if (!req.user) return next(ApiError.unauthorized('Authentication required'));

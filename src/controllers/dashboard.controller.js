@@ -3,14 +3,11 @@ import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok } from '../utils/respond.js';
 import { dashboardCache } from '../utils/cache.js';
+import { statusOfRow } from '../utils/stock.js';
 import { parseRoleMetadata } from './roles.controller.js';
+import { userCan, isSuperAdminUser } from '../middleware/authorize.js';
 
-const statusOf = (r) => {
-  if (r.current_stock === 0) return 'out_of_stock';
-  if (r.current_stock <= r.minimum_stock) return 'low_stock';
-  if (r.current_stock <= r.reorder_point) return 'reorder';
-  return 'in_stock';
-};
+const statusOf = statusOfRow;
 
 /**
  * GET /api/dashboard
@@ -20,9 +17,12 @@ const statusOf = (r) => {
  */
 export const getDashboard = asyncHandler(async (req, res) => {
   const roleCode = req.user.role.role_code;
-  const perms = req.user.permissions;
+  const isSuper = isSuperAdminUser(req.user);
+  // Same permission rules as the routes (aliases, module.manage, Super Admin bypass)
+  const can = (code) => userCan(req.user, code);
   const tenantId = req.tenantId || 'default-org';
-  const cacheKey = `dash_${tenantId}_${roleCode}`;
+  // Keyed per user: the activity panel is user-specific for non-super-admins
+  const cacheKey = `dash_${tenantId}_${roleCode}_${req.user.id}`;
 
   const cached = dashboardCache.get(cacheKey);
   if (cached) {
@@ -32,7 +32,7 @@ export const getDashboard = asyncHandler(async (req, res) => {
   const payload = { role: roleCode, generatedAt: new Date().toISOString(), cards: {}, panels: {} };
 
   /* ---------------------------------------------------- inventory-side data */
-  if (perms.includes('inventory.view')) {
+  if (can('inventory.view')) {
     const { data: inv, error } = await supabaseAdmin
       .from('inventory')
       .select('current_stock, minimum_stock, reorder_point, product:products ( product_id, product_name, sku, unit_price )');
@@ -63,7 +63,7 @@ export const getDashboard = asyncHandler(async (req, res) => {
   }
 
   /* ------------------------------------------------------------------ alerts */
-  if (perms.includes('alerts.view')) {
+  if (can('alerts.view')) {
     const { data: alerts } = await supabaseAdmin
       .from('alerts')
       .select('alert_id, alert_type, alert_message, priority, date_created, product:products ( product_name, sku )')
@@ -80,7 +80,7 @@ export const getDashboard = asyncHandler(async (req, res) => {
   }
 
   /* -------------------------------------------------------- stock movements */
-  if (perms.includes('movements.view')) {
+  if (can('movements.view')) {
     const { data: movements } = await supabaseAdmin
       .from('stock_movements')
       .select('movement_id, movement_type, quantity, date_recorded, product:products ( product_name, sku ), recorded_by_user:users!stock_movements_recorded_by_fkey ( full_name )')
@@ -101,37 +101,40 @@ export const getDashboard = asyncHandler(async (req, res) => {
   }
 
   /* ----------------------------------------------------------- system / users */
-  if (perms.includes('users.view')) {
-    const { count: totalUsers } = await supabaseAdmin
-      .from('users').select('user_id', { count: 'exact', head: true }).eq('is_active', true);
-    payload.cards.totalUsers = totalUsers ?? 0;
-
-    const { data: roles } = await supabaseAdmin.from('roles').select('role_id, role_code, role_name');
+  if (can('users.view')) {
+    const { data: rolesAll } = await supabaseAdmin.from('roles').select('role_id, role_code, role_name');
     const { data: users } = await supabaseAdmin.from('users').select('role_id').eq('is_active', true);
-    payload.panels.usersByRole = (roles || []).map((r) => ({
+    // Super Admin accounts are not disclosed to tenant-level users
+    const roles = (rolesAll || []).filter((r) => isSuper || r.role_code !== 'super_admin');
+    const visibleRoleIds = new Set(roles.map((r) => r.role_id));
+    payload.cards.totalUsers = (users || []).filter((u) => visibleRoleIds.has(u.role_id)).length;
+    payload.panels.usersByRole = roles.map((r) => ({
       roleCode: r.role_code,
       roleName: r.role_name,
       count: (users || []).filter((u) => u.role_id === r.role_id).length,
     }));
   }
 
-  if (perms.includes('logs.view')) {
-    const { data: logs } = await supabaseAdmin
+  if (can('logs.view')) {
+    // Same scope as GET /api/logs: only Super Admin sees everyone's activity.
+    let logQuery = supabaseAdmin
       .from('activity_logs')
       .select('log_id, action, entity_type, entity_id, created_at, user:users ( full_name )')
       .order('created_at', { ascending: false })
       .limit(8);
+    if (!isSuper) logQuery = logQuery.eq('user_id', req.user.id);
+    const { data: logs } = await logQuery;
     payload.panels.recentActivity = logs || [];
   }
 
-  if (perms.includes('suppliers.view')) {
+  if (can('suppliers.view')) {
     const { count } = await supabaseAdmin
       .from('suppliers').select('supplier_id', { count: 'exact', head: true }).eq('is_active', true);
     payload.cards.activeSuppliers = count ?? 0;
   }
 
   /* ------------------------------------------------------------------ finance */
-  if (perms.includes('finance.view')) {
+  if (can('finance.view')) {
     // Sales and transactions are scheduled for the finals phase. The card is
     // returned as a declared placeholder so the Finance dashboard is honest
     // about what is not built yet rather than showing invented numbers.

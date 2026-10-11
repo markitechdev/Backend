@@ -5,7 +5,7 @@ import * as usersCtrl from '../controllers/users.controller.js';
 import * as rolesCtrl from '../controllers/roles.controller.js';
 import * as logsCtrl from '../controllers/logs.controller.js';
 import * as dashCtrl from '../controllers/dashboard.controller.js';
-import { validateBody, validateParams, uuidParamSchema } from '../middleware/validate.js';
+import { validateBody, validateParams, uuidParamSchema, idParamSchema } from '../middleware/validate.js';
 import { ok } from '../utils/respond.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { supabaseAdmin } from '../config/supabase.js';
@@ -39,17 +39,30 @@ router.get('/stats', asyncHandler(async (_req, res) => {
   });
 }));
 
-// Super Admin tenant / workspace management
+// Super Admin tenant / workspace overview.
+// NOTE: the database is currently single-organization (there is no
+// organizations table yet), so this returns the one real workspace with live
+// counts instead of invented tenant records.
 router.get('/tenants', asyncHandler(async (_req, res) => {
+  const [usersRes, activeRes, productsRes, firstUserRes] = await Promise.all([
+    supabaseAdmin.from('users').select('user_id', { count: 'exact', head: true }),
+    supabaseAdmin.from('users').select('user_id', { count: 'exact', head: true }).eq('is_active', true),
+    supabaseAdmin.from('products').select('product_id', { count: 'exact', head: true }),
+    supabaseAdmin.from('users').select('created_at').order('created_at', { ascending: true }).limit(1),
+  ]);
   ok(res, [
     {
       tenantId: 'default-org',
       tenantName: 'Primary Workspace',
       status: 'active',
-      plan: 'enterprise',
-      createdAt: '2026-01-01T00:00:00.000Z',
+      plan: 'single-organization',
+      isolationMode: 'single-organization',
+      totalUsers: usersRes.count ?? 0,
+      activeUsers: activeRes.count ?? 0,
+      totalProducts: productsRes.count ?? 0,
+      createdAt: firstUserRes.data?.[0]?.created_at ?? null,
     },
-  ]);
+  ], { multiTenant: false });
 }));
 
 // Super Admin User Accounts Management
@@ -63,13 +76,13 @@ router.post('/users/:id/password', validateParams(uuidParamSchema), validateBody
 // Super Admin Roles & Permission Matrix
 router.get('/roles', rolesCtrl.listRoles);
 router.get('/roles/permissions', rolesCtrl.listPermissions);
-router.get('/roles/:id', rolesCtrl.getRole);
-router.get('/roles/:id/users', rolesCtrl.getRoleUsers);
+router.get('/roles/:id', validateParams(idParamSchema), rolesCtrl.getRole);
+router.get('/roles/:id/users', validateParams(idParamSchema), rolesCtrl.getRoleUsers);
 router.post('/roles', validateBody(rolesCtrl.createRoleSchema), rolesCtrl.createRole);
-router.patch('/roles/:id', validateBody(rolesCtrl.updateRoleSchema), rolesCtrl.updateRole);
-router.put('/roles/:id', validateBody(rolesCtrl.updateRoleSchema), rolesCtrl.updateRole);
-router.put('/roles/:id/permissions', validateBody(rolesCtrl.updatePermissionsSchema), rolesCtrl.updateRolePermissions);
-router.delete('/roles/:id', rolesCtrl.deleteRole);
+router.patch('/roles/:id', validateParams(idParamSchema), validateBody(rolesCtrl.updateRoleSchema), rolesCtrl.updateRole);
+router.put('/roles/:id', validateParams(idParamSchema), validateBody(rolesCtrl.updateRoleSchema), rolesCtrl.updateRole);
+router.put('/roles/:id/permissions', validateParams(idParamSchema), validateBody(rolesCtrl.updatePermissionsSchema), rolesCtrl.updateRolePermissions);
+router.delete('/roles/:id', validateParams(idParamSchema), rolesCtrl.deleteRole);
 
 // Super Admin Platform Audit Trail
 router.get('/logs', logsCtrl.listLogs);

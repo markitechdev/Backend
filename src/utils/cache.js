@@ -68,6 +68,8 @@ export const invalidateUserProfile = (userId) => {
 /** Invalidates all profiles associated with a role */
 export const invalidateAllUserProfiles = () => {
   profileCache.clear();
+  // Dashboard payloads depend on permissions, so they must be rebuilt too.
+  dashboardCache.clear();
 };
 
 /** Invalidates dashboard cache for a specific tenant */

@@ -9,6 +9,7 @@ export const notFoundHandler = (req, _res, next) => {
 // eslint-disable-next-line no-unused-vars
 export const errorHandler = (err, _req, res, _next) => {
   let status = err.status || 500;
+  if (/not allowed by CORS/.test(err.message || '')) status = 403;
   let message = err.message || 'An unexpected error occurred';
   let code = err.code || ApiError.defaultCode(status);
   let details = err.details || null;
@@ -28,6 +29,16 @@ export const errorHandler = (err, _req, res, _next) => {
     status = 400;
     code = 'BAD_REQUEST';
     message = 'Invalid input syntax for parameter type.';
+    details = null;
+  } else if (err.code === '23514') {
+    status = 400;
+    code = 'BAD_REQUEST';
+    message = 'The submitted values violate a data rule (for example a negative quantity).';
+    details = null;
+  } else if (err.code === 'P0001') {
+    // Raised by our own database functions (e.g. "Insufficient stock ...")
+    status = 400;
+    code = 'BAD_REQUEST';
     details = null;
   } else if (err.code === 'PGRST116') {
     status = 404;

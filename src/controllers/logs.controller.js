@@ -3,6 +3,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok, paginated } from '../utils/respond.js';
 import { parseRoleMetadata } from './roles.controller.js';
+import { applyDateRange, pageParams } from '../utils/query.js';
 
 /**
  * GET /api/logs & /api/super-admin/logs
@@ -12,6 +13,11 @@ import { parseRoleMetadata } from './roles.controller.js';
 export const listLogs = asyncHandler(async (req, res) => {
   const { action, entityType, userId, from, to, search, page, limit } = req.query;
 
+  const paging = pageParams(page, limit, { max: 200, fallback: 25 });
+  // Without a free-text search the database does the paging (and the count),
+  // instead of loading the whole audit table into memory on every request.
+  const dbPaging = paging && !search;
+
   let q = supabaseAdmin.from('activity_logs')
     .select(`
       log_id, action, entity_type, entity_id, details, created_at,
@@ -19,13 +25,12 @@ export const listLogs = asyncHandler(async (req, res) => {
         user_id, full_name, username, email,
         role:roles ( role_id, role_code, role_name, description )
       )
-    `)
+    `, dbPaging ? { count: 'exact' } : undefined)
     .order('created_at', { ascending: false });
 
   if (action)     q = q.eq('action', action);
   if (entityType) q = q.eq('entity_type', entityType);
-  if (from)       q = q.gte('created_at', from);
-  if (to)         q = q.lte('created_at', to);
+  q = applyDateRange(q, 'created_at', from, to);
 
   // Scope enforcement: only Super Admin can inspect all logs; other roles see only their own
   const isSuperAdmin = req.user.role?.role_code === 'super_admin';
@@ -38,7 +43,10 @@ export const listLogs = asyncHandler(async (req, res) => {
     q = q.eq('user_id', userId);
   }
 
-  const { data, error } = await q;
+  if (dbPaging) q = q.range(paging.from, paging.to);
+  else if (!search) q = q.limit(1000);
+
+  const { data, error, count } = await q;
   if (error) throw new ApiError(500, error.message);
 
   let rows = (data || []).map((l) => {
@@ -74,12 +82,12 @@ export const listLogs = asyncHandler(async (req, res) => {
     );
   }
 
-  if (page || limit) {
-    const pageNum = Math.max(1, Number(page) || 1);
-    const limitNum = Math.max(1, Math.min(Number(limit) || 25, 200));
-    const offset = (pageNum - 1) * limitNum;
-    const paged = rows.slice(offset, offset + limitNum);
-    return paginated(res, paged, { page: pageNum, limit: limitNum, total: rows.length });
+  if (dbPaging) {
+    return paginated(res, rows, { page: paging.page, limit: paging.limit, total: count ?? rows.length });
+  }
+  if (paging) {
+    const paged = rows.slice(paging.from, paging.to + 1);
+    return paginated(res, paged, { page: paging.page, limit: paging.limit, total: rows.length });
   }
 
   ok(res, rows, { total: rows.length });

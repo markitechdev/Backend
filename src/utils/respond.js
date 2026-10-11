@@ -6,11 +6,16 @@ export const created = (res, data, meta) =>
 
 export const noContent = (res) => res.status(204).send();
 
-export const paginated = (res, items, { page = 1, limit = 25, total = 0 } = {}) => {
+/**
+ * Paginated response. Any extra keys passed alongside page/limit/total
+ * (for example a report `summary`) are returned under `meta` so they are not
+ * silently dropped when the caller asks for a page.
+ */
+export const paginated = (res, items, { page = 1, limit = 25, total = 0, ...extra } = {}) => {
   const pageNum = Math.max(1, Number(page) || 1);
-  const limitNum = Math.max(1, Math.min(Number(limit) || 25, 100));
+  const limitNum = Math.max(1, Math.min(Number(limit) || 25, 200));
   const totalNum = Number(total) || 0;
-  const totalPages = limitNum > 0 ? Math.ceil(totalNum / limitNum) : 1;
+  const totalPages = Math.max(1, Math.ceil(totalNum / limitNum));
 
   return res.json({
     success: true,
@@ -23,5 +28,6 @@ export const paginated = (res, items, { page = 1, limit = 25, total = 0 } = {}) 
       hasNext: pageNum < totalPages,
       hasPrev: pageNum > 1,
     },
+    meta: { total: totalNum, ...extra },
   });
 };

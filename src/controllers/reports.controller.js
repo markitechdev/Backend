@@ -3,12 +3,15 @@ import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok, paginated } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
+import { applyDateRange } from '../utils/query.js';
+import { stockStatus } from '../utils/stock.js';
 
-const statusOf = (currentStock, minStock, reorderPoint) => {
-  if (currentStock === 0) return 'out_of_stock';
-  if (currentStock <= minStock) return 'low_stock';
-  if (currentStock <= reorderPoint) return 'reorder';
-  return 'in_stock';
+const statusOf = stockStatus;
+
+/** Logs report generation once per request for page 1 only, so paging does not flood the audit trail. */
+const logReport = async (req, details) => {
+  if (Number(req.query.page || 1) > 1) return;
+  await logActivity(req.user.id, 'generate_report', 'reports', null, details);
 };
 
 const paginateArray = (res, rows, page, limit, extra = {}) => {
@@ -97,7 +100,7 @@ export const getInventorySummaryReport = asyncHandler(async (req, res) => {
     reorderCount: rows.filter((r) => r.stockStatus === 'reorder').length,
   };
 
-  await logActivity(req.user.id, 'generate_report', 'reports', null, { report: 'inventory_summary' });
+  await logReport(req, { report: 'inventory_summary' });
   return paginateArray(res, rows, page, limit, { summary });
 });
 
@@ -120,8 +123,7 @@ export const getStockMovementsReport = asyncHandler(async (req, res) => {
     `)
     .order('date_recorded', { ascending: false });
 
-  if (from) q = q.gte('date_recorded', from);
-  if (to)   q = q.lte('date_recorded', to);
+  q = applyDateRange(q, 'date_recorded', from, to);
   if (type) q = q.eq('movement_type', type);
   if (productId) q = q.eq('product_id', Number(productId));
   if (userId)    q = q.eq('recorded_by', userId);
@@ -170,7 +172,7 @@ export const getStockMovementsReport = asyncHandler(async (req, res) => {
     returnedUnits: rows.filter((r) => r.movementType === 'returned').reduce((s, r) => s + r.quantity, 0),
   };
 
-  await logActivity(req.user.id, 'generate_report', 'reports', null, { report: 'stock_movements' });
+  await logReport(req, { report: 'stock_movements' });
   return paginateArray(res, rows, page, limit, { summary });
 });
 
@@ -194,8 +196,7 @@ export const getShrinkageReport = asyncHandler(async (req, res) => {
     .in('movement_type', ['damaged', 'missing'])
     .order('date_recorded', { ascending: false });
 
-  if (from) q = q.gte('date_recorded', from);
-  if (to)   q = q.lte('date_recorded', to);
+  q = applyDateRange(q, 'date_recorded', from, to);
   if (productId) q = q.eq('product_id', Number(productId));
 
   const { data, error } = await q;
@@ -246,7 +247,7 @@ export const getShrinkageReport = asyncHandler(async (req, res) => {
     },
   };
 
-  await logActivity(req.user.id, 'generate_report', 'reports', null, { report: 'shrinkage' });
+  await logReport(req, { report: 'shrinkage' });
   return paginateArray(res, rows, page, limit, { summary });
 });
 
@@ -305,7 +306,7 @@ export const getLowStockReport = asyncHandler(async (req, res) => {
     totalDeficitUnits: rows.reduce((s, r) => s + r.deficit, 0),
   };
 
-  await logActivity(req.user.id, 'generate_report', 'reports', null, { report: 'low_stock' });
+  await logReport(req, { report: 'low_stock' });
   return paginateArray(res, rows, page, limit, { summary });
 });
 
@@ -366,7 +367,7 @@ export const getOutOfStockReport = asyncHandler(async (req, res) => {
     ),
   };
 
-  await logActivity(req.user.id, 'generate_report', 'reports', null, { report: 'out_of_stock' });
+  await logReport(req, { report: 'out_of_stock' });
   return paginateArray(res, rows, page, limit, { summary });
 });
 
@@ -434,7 +435,7 @@ export const getReorderReport = asyncHandler(async (req, res) => {
     ),
   };
 
-  await logActivity(req.user.id, 'generate_report', 'reports', null, { report: 'reorder' });
+  await logReport(req, { report: 'reorder' });
   return paginateArray(res, rows, page, limit, { summary });
 });
 
@@ -506,6 +507,6 @@ export const getSupplierSummaryReport = asyncHandler(async (req, res) => {
     ),
   };
 
-  await logActivity(req.user.id, 'generate_report', 'reports', null, { report: 'suppliers' });
+  await logReport(req, { report: 'suppliers' });
   return paginateArray(res, rows, page, limit, { summary });
 });
