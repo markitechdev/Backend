@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { supabaseAdmin } from '../config/supabase.js';
 import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { ok, created, noContent } from '../utils/respond.js';
+import { ok, created, noContent, paginated } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
 import { refreshAlertsForProduct } from '../services/alert.service.js';
 
@@ -58,7 +58,17 @@ export const listProducts = asyncHandler(async (req, res) => {
 
   let rows = data.map(decorate);
   if (stockStatus) rows = rows.filter((r) => r.stock_status === stockStatus);
-  ok(res, rows);
+
+  const { page, limit } = req.query;
+  if (page || limit) {
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.max(1, Math.min(Number(limit) || 25, 100));
+    const offset = (pageNum - 1) * limitNum;
+    const paged = rows.slice(offset, offset + limitNum);
+    return paginated(res, paged, { page: pageNum, limit: limitNum, total: rows.length });
+  }
+
+  ok(res, rows, { total: rows.length });
 });
 
 /** GET /api/products/:id */

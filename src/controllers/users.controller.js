@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { supabaseAdmin } from '../config/supabase.js';
 import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
-import { ok, created, noContent } from '../utils/respond.js';
+import { ok, created, noContent, paginated } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
 import { invalidateUserProfile } from '../utils/cache.js';
 
@@ -52,7 +52,7 @@ export const updateUserSchema = z.object({
 
 /** GET /api/users */
 export const listUsers = asyncHandler(async (req, res) => {
-  const { role, search, active } = req.query;
+  const { role, search, active, page, limit } = req.query;
   let q = supabaseAdmin.from('users').select(SELECT).order('created_at', { ascending: false });
 
   if (active === 'true')  q = q.eq('is_active', true);
@@ -64,7 +64,16 @@ export const listUsers = asyncHandler(async (req, res) => {
 
   const rows = (role ? data.filter((u) => u.role?.role_code === role) : data)
     .map((u) => serializeUser(u, req.user.role?.role_code));
-  ok(res, rows);
+
+  if (page || limit) {
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.max(1, Math.min(Number(limit) || 25, 100));
+    const offset = (pageNum - 1) * limitNum;
+    const paged = rows.slice(offset, offset + limitNum);
+    return paginated(res, paged, { page: pageNum, limit: limitNum, total: rows.length });
+  }
+
+  ok(res, rows, { total: rows.length });
 });
 
 /** GET /api/users/:id */
