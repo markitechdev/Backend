@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { requireRole } from '../src/middleware/authorize.js';
-import { createRoleSchema, updateRoleSchema, updatePermissionsSchema } from '../src/controllers/roles.controller.js';
+import {
+  createRoleSchema,
+  updateRoleSchema,
+  updatePermissionsSchema,
+  getDefaultRoleIcon,
+  parseRoleMetadata,
+  serializeRoleMetadata,
+} from '../src/controllers/roles.controller.js';
 import { sanitizeLogData } from '../src/utils/sanitizeLog.js';
 
 test('Roles: Non-Super Admin accounts are blocked from role governance', () => {
@@ -36,30 +43,70 @@ test('Roles: Schema validation rejects invalid role definitions', () => {
   const parseResult2 = createRoleSchema.safeParse(shortName);
   assert.strictEqual(parseResult2.success, false, 'Role name shorter than 3 chars must be rejected');
 
-  // Valid role definition
+  // Valid role definition with optional icon
   const validRole = {
     roleCode: 'warehouse_specialist',
     roleName: 'Warehouse Specialist',
+    icon: '📦',
     description: 'Manages physical warehouse bin locations and transfers',
     permissionIds: [1, 2, 5],
   };
   const parseResult3 = createRoleSchema.safeParse(validRole);
   assert.strictEqual(parseResult3.success, true, 'Valid role definition must pass validation');
+  assert.strictEqual(parseResult3.data.icon, '📦');
 });
 
-test('Roles: Update schema correctly handles activation and renaming', () => {
+test('Roles: Update schema correctly handles activation, icon, and renaming', () => {
   const validUpdate = {
     roleName: 'Senior Warehouse Specialist',
+    icon: '🏢',
     description: 'Updated operational duties',
     isActive: false,
   };
   const result = updateRoleSchema.safeParse(validUpdate);
   assert.strictEqual(result.success, true);
   assert.strictEqual(result.data.isActive, false);
+  assert.strictEqual(result.data.icon, '🏢');
 
   const invalidPermissions = { permissionIds: [-1, 'abc'] };
   const permResult = updatePermissionsSchema.safeParse(invalidPermissions);
   assert.strictEqual(permResult.success, false, 'Invalid permission IDs must be rejected');
+});
+
+test('Roles: Visual metadata system assigns correct icons and persists round-trip', () => {
+  // Default system tier icons
+  assert.strictEqual(getDefaultRoleIcon('super_admin'), '🛡️');
+  assert.strictEqual(getDefaultRoleIcon('warehouse_admin'), '⚙️');
+  assert.strictEqual(getDefaultRoleIcon('staff_admin'), '👤');
+  assert.strictEqual(getDefaultRoleIcon('finance_admin'), '💰');
+  assert.strictEqual(getDefaultRoleIcon('custom_role'), '🧩');
+
+  // Serialize custom role with icon and description
+  const serialized = serializeRoleMetadata({
+    icon: '📦',
+    isActive: true,
+    description: 'Manages inventory transfers',
+    roleCode: 'warehouse_supervisor',
+  });
+  assert.strictEqual(serialized.includes('[ICON:📦]'), true);
+
+  // Parse back
+  const parsed = parseRoleMetadata(serialized, 'warehouse_supervisor');
+  assert.strictEqual(parsed.icon, '📦');
+  assert.strictEqual(parsed.isActive, true);
+  assert.strictEqual(parsed.description, 'Manages inventory transfers');
+
+  // Deactivated state serialization
+  const deactSerialized = serializeRoleMetadata({
+    icon: '🛒',
+    isActive: false,
+    description: 'Purchasing coordination',
+    roleCode: 'buyer',
+  });
+  const deactParsed = parseRoleMetadata(deactSerialized, 'buyer');
+  assert.strictEqual(deactParsed.icon, '🛒');
+  assert.strictEqual(deactParsed.isActive, false);
+  assert.strictEqual(deactParsed.description, 'Purchasing coordination');
 });
 
 test('Roles: Audit events sanitize sensitive tokens and credentials', () => {
@@ -91,13 +138,4 @@ test('Roles: System roles protection prevents accidental deactivation of system 
 
   const canDeactivate = !(isSystemRole && requestedDeactivation === false);
   assert.strictEqual(canDeactivate, false, 'System roles must never be eligible for deactivation');
-});
-
-test('Roles: Role description flags deactivated status permanently', () => {
-  const baseDescription = 'Temporary auditor for Q3';
-  const deactivatedDesc = `[DEACTIVATED] ${baseDescription}`;
-
-  assert.strictEqual(deactivatedDesc.startsWith('[DEACTIVATED]'), true);
-  const restoredDesc = deactivatedDesc.replace(/^\[DEACTIVATED\]\s*/, '');
-  assert.strictEqual(restoredDesc, baseDescription);
 });
