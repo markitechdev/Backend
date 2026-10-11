@@ -1,4 +1,4 @@
-import { ApiError } from '../utils/ApiError.js';
+﻿import { ApiError } from '../utils/ApiError.js';
 
 /** Requires ALL of the listed permission codes. */
 export const requirePermission = (...codes) => (req, _res, next) => {
@@ -30,6 +30,15 @@ export const requireRole = (...roleCodes) => (req, _res, next) => {
   if (!req.user) return next(ApiError.unauthorized('Authentication required'));
   if (!roleCodes.includes(req.user.role?.role_code)) {
     return next(ApiError.forbidden(`Access denied: Restricted to role (${roleCodes.join(', ')})`));
+  }
+  next();
+};
+
+/** Strictly restricts route execution exclusively to the verified Super Admin role. */
+export const requireSuperAdmin = (req, _res, next) => {
+  if (!req.user) return next(ApiError.unauthorized('Authentication required'));
+  if (req.user.role?.role_code !== 'super_admin') {
+    return next(ApiError.forbidden('Access denied: Restricted to Super Admin'));
   }
   next();
 };
