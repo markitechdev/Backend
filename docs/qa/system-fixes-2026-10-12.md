@@ -76,3 +76,19 @@ New `components/ui/HorizontalBarChart.vue`: shared "nice" scale with gridlines a
 ## Not done (needs a decision)
 
 True multi-tenancy (separate client workspaces). The schema is single-organization; `/super-admin/tenants` now reports that honestly. Adding it means an `organizations` table, `organization_id` on every business table, and scoping every query.
+
+## Review round 2 (independent review)
+
+| Problem | Fix |
+|---|---|
+| A user manager could move a peer admin into a resettable role, reset the password and move them back (account take-over) | Only a Super Admin may assign administrator roles (Super Admin or any role with `users/roles/system/security.manage`) or change, reset or delete an account holding one |
+| Upper-case copy of your own user id bypassed "cannot change own role / delete self" | UUID route params are lower-cased |
+| "Deactivated role" check never matched (`[ICON:..]` prefix), and typing `[DEACTIVATED]` into the Super Admin description locked every Super Admin out | One parser everywhere; markers stripped from typed text; the Super Admin role can never count as deactivated |
+| Client mistakes (duplicate username, bad reference, bad filter value) returned 500 | `ApiError.fromDb()` maps Postgres codes to 400/404/409 |
+| Movement summary and stock-movement/shrinkage reports stopped at 1,000 rows | Paged reads (`fetchAllRows`) |
+| Logout signed the user out on every device | `signOut(..., 'local')` |
+| Alert counts differed between pages | All "active alerts" counts include acknowledged (open) alerts |
+| Super Admin dashboard: blank KPI numbers (white on white), Reorder Due copied Low Stock, fake priority split, fake movements | Dark-mode cards; real `reorderDueCount`, `alertsByPriority`, `recentMovements`, `activeSuppliers` |
+| Super Admin role edit always failed | Role name is not sent for the protected Super Admin role |
+| Not deployable on Vercel | `api/index.js` + `vercel.json`; `trust proxy` for per-user rate limits; clear 500 when env vars are missing; wildcard CORS origins |
+| `refresh_product_alerts()` callable by anonymous clients; direct `current_stock` writes possible with a user JWT | `supabase/06_hardening.sql` |

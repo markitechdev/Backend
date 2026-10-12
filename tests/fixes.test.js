@@ -148,3 +148,70 @@ test('Reports: paginated responses keep the report summary', () => {
   assert.equal(res.body.meta.summary.totalUnits, 9);
   assert.equal(res.body.pagination.totalPages, 3);
 });
+
+/* --------------------------------------------- review round 2 regressions */
+import { updateUser, resetPassword, createUser } from '../src/controllers/users.controller.js';
+import { validateParams, uuidParamSchema } from '../src/middleware/validate.js';
+import { ApiError } from '../src/utils/ApiError.js';
+import { parseRoleMetadata, serializeRoleMetadata } from '../src/controllers/roles.controller.js';
+
+const STAFF_ROLE = { role_id: 3, role_code: 'staff_admin', description: null,
+  role_permissions: [{ permissions: { permission_code: 'users.manage' } }] };
+const WAREHOUSE_ROLE = { role_id: 2, role_code: 'warehouse_admin', description: null,
+  role_permissions: [{ permissions: { permission_code: 'inventory.view' } }] };
+
+const byTable = (map) => (table) => fakeQuery(map[table] || { data: null, error: null });
+
+test('Takeover fix: a user manager cannot move an account into an administrator role', async (t) => {
+  t.mock.method(supabaseAdmin, 'from', byTable({
+    users: { data: { user_id: 'u-wh', username: 'wh', is_active: true, role: { role_id: 2, role_code: 'warehouse_admin' } }, error: null },
+    roles: { data: STAFF_ROLE, error: null },
+  }));
+  const { err } = await run(updateUser, { params: { id: 'u-wh' }, body: { roleId: 3 }, user: staffAdmin });
+  assert.equal(err?.status, 403);
+});
+
+test('Takeover fix: a user manager cannot reset another administrator\'s password', async (t) => {
+  t.mock.method(supabaseAdmin, 'from', byTable({
+    users: { data: { user_id: 'u-other', username: 'o', role: { role_id: 3, role_code: 'staff_admin' } }, error: null },
+    roles: { data: STAFF_ROLE, error: null },
+  }));
+  const { err } = await run(resetPassword, { params: { id: 'u-other' }, body: { password: 'x'.repeat(10) }, user: staffAdmin });
+  assert.equal(err?.status, 403);
+});
+
+test('Takeover fix: creating an account in an administrator role needs Super Admin', async (t) => {
+  t.mock.method(supabaseAdmin, 'from', byTable({ roles: { data: STAFF_ROLE, error: null } }));
+  const { err } = await run(createUser, { body: { fullName: 'Ab', username: 'abc', email: 'a@b.co', password: 'x'.repeat(10), roleId: 3 }, user: staffAdmin });
+  assert.equal(err?.status, 403);
+});
+
+test('Takeover fix: an upper-case copy of your own id is still "you"', () => {
+  const req = { params: { id: 'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE' } };
+  validateParams(uuidParamSchema)(req, {}, () => {});
+  assert.equal(req.params.id, 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee');
+});
+
+test('Deactivation fix: a deactivated role is recognised even with an icon prefix', async (t) => {
+  const desc = serializeRoleMetadata({ icon: '📦', isActive: false, description: 'Temp', roleCode: 'temp' });
+  assert.equal(parseRoleMetadata(desc, 'temp').isActive, false);
+  t.mock.method(supabaseAdmin, 'from', byTable({
+    users: { data: { user_id: 'u-x', username: 'x', is_active: true, role: { role_id: 2, role_code: 'warehouse_admin' } }, error: null },
+    roles: { data: { ...WAREHOUSE_ROLE, role_id: 9, role_code: 'temp', description: desc }, error: null },
+  }));
+  const { err } = await run(updateUser, { params: { id: 'u-x' }, body: { roleId: 9 }, user: superAdmin });
+  assert.equal(err?.status, 400);
+  assert.match(err.message, /deactivated/);
+});
+
+test('Deactivation fix: typed text cannot smuggle in the [DEACTIVATED] marker', () => {
+  const desc = serializeRoleMetadata({ icon: '🛡️', isActive: true, description: '[DEACTIVATED] gotcha', roleCode: 'super_admin' });
+  assert.equal(parseRoleMetadata(desc, 'super_admin').isActive, true);
+});
+
+test('Errors: database client mistakes map to 4xx instead of 500', () => {
+  assert.equal(ApiError.fromDb({ code: '23505' }).status, 409);
+  assert.equal(ApiError.fromDb({ code: '23503' }).status, 400);
+  assert.equal(ApiError.fromDb({ code: '22P02' }).status, 400);
+  assert.equal(ApiError.fromDb({ code: 'XX000', message: 'boom' }).status, 500);
+});
