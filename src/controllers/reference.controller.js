@@ -60,7 +60,7 @@ export const deleteCategory = asyncHandler(async (req, res) => {
 /* ------------------------------------------------------------------- SUPPLIERS */
 
 export const supplierSchema = z.object({
-  supplierName: z.string().min(2),
+  supplierName: z.string().trim().min(2, 'Supplier name must be at least 2 characters'),
   contactPerson: z.string().optional().nullable(),
   contactNumber: z.string().optional().nullable(),
   email: z.string().email().optional().nullable().or(z.literal('')),
@@ -68,13 +68,30 @@ export const supplierSchema = z.object({
   isActive: z.boolean().default(true),
 });
 
+/** Escapes LIKE wildcards so a name is matched literally. */
+const likeLiteral = (v) => String(v).replace(/[\\%_]/g, (c) => `\\${c}`);
+
+/** 409 when another supplier already uses this name (case and outer spaces ignored). */
+const assertSupplierNameFree = async (name, exceptId = null) => {
+  const clean = String(name).trim().replace(/\s+/g, ' ');
+  let q = supabaseAdmin.from('suppliers').select('supplier_id, supplier_name').ilike('supplier_name', likeLiteral(clean));
+  if (exceptId !== null) q = q.neq('supplier_id', exceptId);
+  const { data, error } = await q.limit(1);
+  if (error) throw ApiError.fromDb(error);
+  if (data?.length) throw ApiError.conflict(`A supplier named "${data[0].supplier_name}" already exists.`);
+};
+
+const supplierDbError = (error) => (error?.code === '23505'
+  ? ApiError.conflict('A supplier with this name already exists.')
+  : ApiError.fromDb(error));
+
 export const listSuppliers = asyncHandler(async (req, res) => {
   let q = supabaseAdmin.from('suppliers')
     .select('supplier_id, supplier_name, contact_person, contact_number, email, address, is_active, products(count)')
     .order('supplier_name');
   if (req.query.active === 'true')  q = q.eq('is_active', true);
   if (req.query.active === 'false') q = q.eq('is_active', false);
-  if (req.query.search) q = q.ilike('supplier_name', `%${req.query.search}%`);
+  if (req.query.search) q = q.ilike('supplier_name', `%${likeLiteral(String(req.query.search).trim())}%`);
 
   const { data, error } = await q;
   if (error) throw ApiError.fromDb(error);
@@ -91,6 +108,7 @@ export const getSupplier = asyncHandler(async (req, res) => {
 
 export const createSupplier = asyncHandler(async (req, res) => {
   const b = req.body;
+  await assertSupplierNameFree(b.supplierName);
   const { data, error } = await supabaseAdmin.from('suppliers').insert({
     supplier_name: b.supplierName,
     contact_person: b.contactPerson ?? null,
@@ -99,7 +117,7 @@ export const createSupplier = asyncHandler(async (req, res) => {
     address: b.address ?? null,
     is_active: b.isActive,
   }).select().single();
-  if (error) throw ApiError.fromDb(error);
+  if (error) throw supplierDbError(error);
   await logActivity(req.user.id, 'SUPPLIER_CREATED', 'suppliers', data.supplier_id, { name: data.supplier_name });
   created(res, data);
 });
@@ -113,10 +131,11 @@ export const updateSupplier = asyncHandler(async (req, res) => {
   if (b.email         !== undefined) patch.email          = b.email || null;
   if (b.address       !== undefined) patch.address        = b.address;
   if (b.isActive      !== undefined) patch.is_active      = b.isActive;
+  if (patch.supplier_name !== undefined) await assertSupplierNameFree(patch.supplier_name, Number(req.params.id));
 
   const { data, error } = await supabaseAdmin
     .from('suppliers').update(patch).eq('supplier_id', req.params.id).select().maybeSingle();
-  if (error) throw ApiError.fromDb(error);
+  if (error) throw supplierDbError(error);
   if (!data) throw ApiError.notFound('Supplier not found');
   await logActivity(req.user.id, 'SUPPLIER_UPDATED', 'suppliers', req.params.id, patch);
   ok(res, data);
