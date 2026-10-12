@@ -8,6 +8,8 @@ import { parseRoleMetadata } from './roles.controller.js';
 import { userCan, isSuperAdminUser } from '../middleware/authorize.js';
 
 const statusOf = statusOfRow;
+/** Sort order for the Super Admin "needs attention" list (most urgent first). */
+const ATTENTION_ORDER = { out_of_stock: 0, low_stock: 1, reorder: 2 };
 
 /**
  * GET /api/dashboard
@@ -301,6 +303,20 @@ export const getSuperAdminDashboard = asyncHandler(async (req, res) => {
     recentMovements: movesRes.data || [],
     itemsNeedingAttention: {
       criticalAlerts: criticalAlerts.slice(0, 5),
+      // every product that is out of stock, low or due for reorder - same rules as the cards above
+      stockItems: inventory
+        .map((i) => ({ ...i, status: statusOf(i) }))
+        .filter((i) => ATTENTION_ORDER[i.status] !== undefined)
+        .sort((a, b) => ATTENTION_ORDER[a.status] - ATTENTION_ORDER[b.status] || a.current_stock - b.current_stock)
+        .map((i) => ({
+          productId: i.product.product_id,
+          productName: i.product.product_name,
+          sku: i.product.sku,
+          currentStock: i.current_stock,
+          minimumStock: i.minimum_stock,
+          reorderPoint: i.reorder_point,
+          status: i.status,
+        })),
       outOfStockItems: inventory
         .filter((i) => i.current_stock === 0)
         .slice(0, 5)
