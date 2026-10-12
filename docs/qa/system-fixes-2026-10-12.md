@@ -92,3 +92,13 @@ True multi-tenancy (separate client workspaces). The schema is single-organizati
 | Super Admin role edit always failed | Role name is not sent for the protected Super Admin role |
 | Not deployable on Vercel | `api/index.js` + `vercel.json`; `trust proxy` for per-user rate limits; clear 500 when env vars are missing; wildcard CORS origins |
 | `refresh_product_alerts()` callable by anonymous clients; direct `current_stock` writes possible with a user JWT | `supabase/06_hardening.sql` |
+
+## Round 3 (suppliers, Super Admin pages, sign-in pages)
+
+| Problem | Fix |
+|---|---|
+| Suppliers listed several times (e.g. CablePro Ltd. ×7) | `04_seed.sql` re-inserted the sample suppliers on every run because supplier names had no unique rule. `supabase/07_suppliers_unique.sql` merges the copies (products move to the kept row) and adds a unique index on the name; the seed now skips existing names and looks products' category/supplier up by name |
+| A duplicate supplier could be created through the app | `POST/PATCH /api/suppliers` return 409 "A supplier named … already exists." (case and outer spaces ignored) |
+| Super Admin "Attention Items" showed only out-of-stock products, with "—" as reorder point | API returns `itemsNeedingAttention.stockItems` (out of stock, low stock, reorder due) with real stock and reorder points; matches the cards |
+
+Run once in Supabase: `supabase/07_suppliers_unique.sql` (after 01–06).
