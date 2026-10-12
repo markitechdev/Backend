@@ -36,7 +36,7 @@ export const getDashboard = asyncHandler(async (req, res) => {
     const { data: inv, error } = await supabaseAdmin
       .from('inventory')
       .select('current_stock, minimum_stock, reorder_point, product:products ( product_id, product_name, sku, unit_price )');
-    if (error) throw new ApiError(500, error.message);
+    if (error) throw ApiError.fromDb(error);
 
     const rows = inv.filter((r) => r.product).map((r) => ({ ...r, stock_status: statusOf(r) }));
 
@@ -67,7 +67,7 @@ export const getDashboard = asyncHandler(async (req, res) => {
     const { data: alerts } = await supabaseAdmin
       .from('alerts')
       .select('alert_id, alert_type, alert_message, priority, date_created, product:products ( product_name, sku )')
-      .eq('alert_status', 'active')
+      .in('alert_status', ['active', 'acknowledged'])
       .order('priority', { ascending: false })
       .order('date_created', { ascending: false });
 
@@ -168,6 +168,8 @@ export const getSuperAdminDashboard = asyncHandler(async (req, res) => {
     alertsRes,
     invRes,
     shrinkRes,
+    movesRes,
+    suppliersRes,
   ] = await Promise.all([
     supabaseAdmin.from('users').select('*', { count: 'exact', head: true }),
     supabaseAdmin.from('users').select('*', { count: 'exact', head: true }).eq('is_active', true),
@@ -180,7 +182,7 @@ export const getSuperAdminDashboard = asyncHandler(async (req, res) => {
     supabaseAdmin.from('activity_logs').select('*', { count: 'exact', head: true }),
     supabaseAdmin.from('alerts')
       .select('alert_id, alert_type, alert_message, priority, date_created, product:products ( product_id, product_name, sku )')
-      .eq('alert_status', 'active')
+      .in('alert_status', ['active', 'acknowledged'])
       .order('priority', { ascending: false })
       .order('date_created', { ascending: false }),
     supabaseAdmin.from('inventory')
@@ -189,6 +191,11 @@ export const getSuperAdminDashboard = asyncHandler(async (req, res) => {
       .select('quantity, movement_type, product:products ( unit_price )')
       .in('movement_type', ['damaged', 'missing'])
       .gte('date_recorded', new Date(Date.now() - 30 * 864e5).toISOString()),
+    supabaseAdmin.from('stock_movements')
+      .select('movement_id, movement_type, quantity, date_recorded, product:products ( product_name, sku )')
+      .order('date_recorded', { ascending: false })
+      .limit(8),
+    supabaseAdmin.from('suppliers').select('supplier_id', { count: 'exact', head: true }).eq('is_active', true),
   ]);
 
   const roles = rolesRes.data || [];
@@ -222,13 +229,20 @@ export const getSuperAdminDashboard = asyncHandler(async (req, res) => {
   let totalValuation = 0;
   let lowStockCount = 0;
   let outOfStockCount = 0;
+  let reorderDueCount = 0;
 
   for (const item of inventory) {
     totalStockUnits += item.current_stock;
     totalValuation += item.current_stock * Number(item.product.unit_price || 0);
-    if (item.current_stock === 0) outOfStockCount += 1;
-    else if (item.current_stock <= item.minimum_stock) lowStockCount += 1;
+    const st = statusOf(item);
+    if (st === 'out_of_stock') outOfStockCount += 1;
+    else if (st === 'low_stock') lowStockCount += 1;
+    else if (st === 'reorder') reorderDueCount += 1;
   }
+
+  const alertsByPriority = alerts.reduce(
+    (acc, a) => { acc[a.priority] = (acc[a.priority] || 0) + 1; return acc; },
+    { critical: 0, high: 0, medium: 0, low: 0 });
 
   const shrinkageUnits30d = shrink.reduce((acc, m) => acc + Math.abs(m.quantity), 0);
   const shrinkageValue30d = Number(
@@ -278,9 +292,13 @@ export const getSuperAdminDashboard = asyncHandler(async (req, res) => {
       totalValuation: Number(totalValuation.toFixed(2)),
       lowStockCount,
       outOfStockCount,
+      reorderDueCount,
+      activeSuppliers: suppliersRes.count ?? 0,
       shrinkageUnits30d,
       shrinkageValue30d,
     },
+    alertsByPriority,
+    recentMovements: movesRes.data || [],
     itemsNeedingAttention: {
       criticalAlerts: criticalAlerts.slice(0, 5),
       outOfStockItems: inventory
