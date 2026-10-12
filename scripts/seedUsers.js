@@ -8,11 +8,22 @@
  */
 import { supabaseAdmin } from '../src/config/supabase.js';
 
+import crypto from 'node:crypto';
+
+/**
+ * Passwords are never stored in the repository. Set them in .env, e.g.
+ *   SEED_SUPERADMIN_PASSWORD=...  SEED_WAREHOUSE_PASSWORD=...
+ *   SEED_STAFF_PASSWORD=...       SEED_FINANCE_PASSWORD=...
+ * Any that are missing get a random password, printed once below.
+ */
+const randomPassword = () => `${crypto.randomBytes(9).toString('base64url')}#9a`;
+const pw = (key) => process.env[`SEED_${key}_PASSWORD`] || randomPassword();
+
 const ACCOUNTS = [
-  { roleCode: 'super_admin',     fullName: 'Jhanyz Laviña',      username: 'superadmin', email: 'superadmin@ims.local', password: 'SuperAdmin123!', position: 'System Administrator' },
-  { roleCode: 'warehouse_admin', fullName: 'Mark Francis Entredicho', username: 'warehouse', email: 'warehouse@ims.local',  password: 'Warehouse123!',  position: 'Warehouse Supervisor' },
-  { roleCode: 'staff_admin',     fullName: 'Seichi Paul Jimenez', username: 'staffadmin', email: 'staff@ims.local',      password: 'StaffAdmin123!', position: 'HR / Staff Officer' },
-  { roleCode: 'finance_admin',   fullName: 'Eckery Vraime Delgado', username: 'finance',  email: 'finance@ims.local',    password: 'Finance123!',    position: 'Finance Officer' },
+  { roleCode: 'super_admin',     fullName: 'Jhanyz Laviña',           username: 'superadmin', email: 'superadmin@ims.local', password: pw('SUPERADMIN'), position: 'System Administrator' },
+  { roleCode: 'warehouse_admin', fullName: 'Mark Francis Entredicho', username: 'warehouse',  email: 'warehouse@ims.local',  password: pw('WAREHOUSE'),  position: 'Warehouse Supervisor' },
+  { roleCode: 'staff_admin',     fullName: 'Seichi Paul Jimenez',     username: 'staffadmin', email: 'staff@ims.local',      password: pw('STAFF'),      position: 'HR / Staff Officer' },
+  { roleCode: 'finance_admin',   fullName: 'Eckery Vraime Delgado',   username: 'finance',    email: 'finance@ims.local',    password: pw('FINANCE'),    position: 'Finance Officer' },
 ];
 
 const run = async () => {
@@ -51,7 +62,7 @@ const run = async () => {
       console.error(`  FAILED  ${acct.email}: ${profErr.message}`);
       continue;
     }
-    console.log(`  created ${acct.email.padEnd(24)} ${acct.password}`);
+    console.log(`  created ${acct.email.padEnd(24)} password: ${acct.password}   <- save it now, it is not stored anywhere`);
   }
 
   console.log('\nDone. Sign in at the frontend with any account above.\n');

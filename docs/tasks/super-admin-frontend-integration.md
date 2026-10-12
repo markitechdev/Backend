@@ -31,7 +31,7 @@ To enforce strict SaaS platform security, the Backend implements two completely 
   ```json
   {
     "email": "superadmin@ims.local",
-    "password": "SuperAdmin123!"
+    "password": "<your-super-admin-password>"
   }
   ```
 - **Success Response (`200 OK`):**

@@ -23,7 +23,7 @@ In the Supabase SQL Editor run, in order, any file not yet applied:
 - Redeploy the frontend after changing it (Vite bakes it in at build time).
 
 ## 4. Before real users
-- Change every demo password (`SuperAdmin123!` etc. are public in `scripts/seedUsers.js`).
+- Change every account password that was ever shared or committed (Super Admin → Platform Users → Reset password).
 - Click through each role once.
 
 ## Known limits on serverless
