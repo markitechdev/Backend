@@ -43,8 +43,10 @@ export const validateParams = (schema) => (req, _res, next) => {
   next();
 };
 
+// Lower-cased so that comparisons like "is this my own id?" cannot be bypassed
+// with an upper-case copy of the same UUID (Postgres matches both).
 export const uuidParamSchema = z.object({
-  id: z.string().uuid('ID must be a valid UUID format'),
+  id: z.string().uuid('ID must be a valid UUID format').transform((v) => v.toLowerCase()),
 });
 
 export const idParamSchema = z.object({

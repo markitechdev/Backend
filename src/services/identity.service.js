@@ -2,7 +2,12 @@ import { supabaseAdmin } from '../config/supabase.js';
 import { ApiError } from '../utils/ApiError.js';
 import { profileCache } from '../utils/cache.js';
 
-const isRoleDeactivated = (role) => Boolean(role?.description && /\[DEACTIVATED\]/.test(role.description));
+import { parseRoleMetadata } from '../controllers/roles.controller.js';
+
+// Same parser the role screens use. The Super Admin role can never be treated
+// as deactivated, so a bad description can never lock every Super Admin out.
+const isRoleDeactivated = (role) =>
+  role?.role_code !== 'super_admin' && !parseRoleMetadata(role?.description, role?.role_code).isActive;
 
 /**
  * Loads (and caches for 60s) the caller's profile, role and permission list.

@@ -13,7 +13,7 @@ const validatePermissionIds = async (ids = []) => {
   if (!unique.length) return unique;
   const { data, error } = await supabaseAdmin
     .from('permissions').select('permission_id').in('permission_id', unique);
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
   const found = new Set((data || []).map((p) => p.permission_id));
   const unknown = unique.filter((id) => !found.has(id));
   if (unknown.length) throw ApiError.badRequest(`Unknown permission id(s): ${unknown.join(', ')}`);
@@ -80,10 +80,13 @@ export const parseRoleMetadata = (description, roleCode) => {
   };
 };
 
+/** Removes the internal [ICON:..] / [DEACTIVATED] markers from user-typed text. */
+const cleanUserDescription = (text) => (text || '').replace(/\[(ICON:[^\]]*|DEACTIVATED)\]/gi, '').replace(/\s+/g, ' ').trim();
+
 /** Serializes role metadata into PostgreSQL description text permanently */
 export const serializeRoleMetadata = ({ icon, isActive, description, roleCode }) => {
-  const chosenIcon = (icon && icon.trim()) ? icon.trim() : getDefaultRoleIcon(roleCode);
-  const cleanDesc = (description || '').trim();
+  const chosenIcon = (icon && icon.trim()) ? icon.trim().replace(/[[\]]/g, '') : getDefaultRoleIcon(roleCode);
+  const cleanDesc = cleanUserDescription(description);
   const iconTag = `[ICON:${chosenIcon}]`;
   const deactTag = isActive === false ? '[DEACTIVATED] ' : '';
   return `${iconTag} ${deactTag}${cleanDesc}`.trim();
@@ -95,7 +98,7 @@ export const listRoles = asyncHandler(async (req, res) => {
     .from('roles')
     .select('role_id, role_code, role_name, description, is_system, role_permissions ( permissions ( permission_id, permission_code, module, description ) )')
     .order('role_id');
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
 
   const { data: users } = await supabaseAdmin.from('users').select('role_id, is_active');
   const callerIsSuper = isSuperAdminUser(req.user);
@@ -112,6 +115,7 @@ export const listRoles = asyncHandler(async (req, res) => {
       isSystem: r.is_system,
       isActive: meta.isActive,
       userCount: (users || []).filter((u) => u.role_id === r.role_id && u.is_active).length,
+      totalUserCount: (users || []).filter((u) => u.role_id === r.role_id).length,
       permissions: (r.role_permissions || []).map((rp) => rp.permissions).filter(Boolean),
     };
   }));
@@ -170,7 +174,7 @@ export const getRoleUsers = asyncHandler(async (req, res) => {
     .eq('role_id', roleId)
     .order('full_name');
 
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
 
   const meta = parseRoleMetadata(role.description, role.role_code);
 
@@ -200,7 +204,7 @@ export const listPermissions = asyncHandler(async (_req, res) => {
     .from('permissions')
     .select('permission_id, permission_code, module, description')
     .order('module').order('permission_code');
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
 
   const grouped = data.reduce((acc, p) => {
     (acc[p.module] ||= []).push(p);
@@ -245,7 +249,7 @@ export const createRole = asyncHandler(async (req, res) => {
     .select().single();
   if (error) {
     if (error.code === '23505') throw ApiError.conflict('A role with that code already exists');
-    throw new ApiError(500, error.message);
+    throw ApiError.fromDb(error);
   }
 
   if (permissionIds.length) {
@@ -254,7 +258,7 @@ export const createRole = asyncHandler(async (req, res) => {
     if (permError) {
       // Do not leave a half-created role behind
       await supabaseAdmin.from('roles').delete().eq('role_id', role.role_id);
-      throw new ApiError(500, permError.message);
+      throw ApiError.fromDb(permError);
     }
   }
 
@@ -339,7 +343,7 @@ export const updateRole = asyncHandler(async (req, res) => {
       .from('roles')
       .update(patch)
       .eq('role_id', roleId);
-    if (updateError) throw new ApiError(500, updateError.message);
+    if (updateError) throw ApiError.fromDb(updateError);
   }
 
   invalidateAllUserProfiles();
@@ -407,7 +411,7 @@ export const updateRolePermissions = asyncHandler(async (req, res) => {
     .from('role_permissions').select('permission_id').eq('role_id', roleId);
 
   const { error: delError } = await supabaseAdmin.from('role_permissions').delete().eq('role_id', roleId);
-  if (delError) throw new ApiError(500, delError.message);
+  if (delError) throw ApiError.fromDb(delError);
 
   if (permissionIds.length) {
     const { error } = await supabaseAdmin.from('role_permissions')
@@ -418,7 +422,7 @@ export const updateRolePermissions = asyncHandler(async (req, res) => {
         await supabaseAdmin.from('role_permissions')
           .insert(previous.map((p) => ({ role_id: roleId, permission_id: p.permission_id })));
       }
-      throw new ApiError(500, error.message);
+      throw ApiError.fromDb(error);
     }
   }
 
@@ -451,7 +455,8 @@ export const deleteRole = asyncHandler(async (req, res) => {
     .from('users').select('user_id', { count: 'exact', head: true }).eq('role_id', roleId);
   if (count) throw ApiError.conflict(`${count} user(s) still use this role. Reassign them first.`);
 
-  await supabaseAdmin.from('roles').delete().eq('role_id', roleId);
+  const { error: delError } = await supabaseAdmin.from('roles').delete().eq('role_id', roleId);
+  if (delError) throw ApiError.fromDb(delError);
   invalidateAllUserProfiles();
   await logActivity(req.user.id, 'ROLE_DELETED', 'roles', roleId, {
     roleCode: role.role_code,
