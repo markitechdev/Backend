@@ -50,3 +50,20 @@ export const pageParams = (page, limit, { max = 100, fallback = 25 } = {}) => {
   const limitNum = Math.max(1, Math.min(Number.parseInt(limit, 10) || fallback, max));
   return { page: pageNum, limit: limitNum, from: (pageNum - 1) * limitNum, to: pageNum * limitNum - 1 };
 };
+
+/**
+ * Reads every row of a query in pages of 1,000 (Supabase's default response
+ * cap), so totals and summaries are not silently truncated.
+ * `build` must return a fresh, fully-filtered query each time it is called and
+ * should include a stable order (e.g. by primary key).
+ */
+export const fetchAllRows = async (build, { pageSize = 1000, maxRows = 50000 } = {}) => {
+  const rows = [];
+  for (let from = 0; from < maxRows; from += pageSize) {
+    const { data, error } = await build().range(from, from + pageSize - 1);
+    if (error) throw ApiError.fromDb(error);
+    rows.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+  return rows;
+};

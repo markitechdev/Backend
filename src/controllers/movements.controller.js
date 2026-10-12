@@ -6,7 +6,7 @@ import { ok, created } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
 import { refreshAlertsForProduct } from '../services/alert.service.js';
 import { invalidateDashboardCache } from '../utils/cache.js';
-import { applyDateRange } from '../utils/query.js';
+import { fetchAllRows, applyDateRange } from '../utils/query.js';
 
 const MOVEMENT_AUDIT_ACTIONS = {
   stock_in: 'STOCK_IN',
@@ -47,7 +47,7 @@ export const listMovements = asyncHandler(async (req, res) => {
   q = applyDateRange(q, 'date_recorded', from, to);
 
   const { data, error } = await q;
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
   ok(res, data, { total: data.length });
 });
 
@@ -101,7 +101,7 @@ export const createMovement = asyncHandler(async (req, res) => {
     if (/No inventory record/i.test(error.message)) {
       throw ApiError.badRequest('This product has no inventory record yet.');
     }
-    throw new ApiError(500, error.message);
+    throw ApiError.fromDb(error);
   }
 
   const { data: inv } = await supabaseAdmin
@@ -135,12 +135,14 @@ export const createMovement = asyncHandler(async (req, res) => {
 export const movementSummary = asyncHandler(async (req, res) => {
   const { from, to } = req.query;
 
-  let q = supabaseAdmin.from('stock_movements')
-    .select('movement_type, quantity, product:products ( unit_price )');
-  q = applyDateRange(q, 'date_recorded', from, to);
-
-  const { data, error } = await q;
-  if (error) throw new ApiError(500, error.message);
+  // Paged read: Supabase returns at most 1,000 rows per request
+  const build = () => {
+    let q = supabaseAdmin.from('stock_movements')
+      .select('movement_type, quantity, product:products ( unit_price )');
+    q = applyDateRange(q, 'date_recorded', from, to);
+    return q.order('movement_id', { ascending: false });
+  };
+  const data = await fetchAllRows(build);
 
   const byType = {};
   let shrinkageUnits = 0;
@@ -217,7 +219,7 @@ export const recordStockCount = asyncHandler(async (req, res) => {
     if (/Insufficient stock/i.test(error.message)) {
       throw ApiError.conflict('Stock changed while the count was being saved. Please count again.');
     }
-    throw new ApiError(500, error.message);
+    throw ApiError.fromDb(error);
   }
 
   await refreshAlertsForProduct(productId);

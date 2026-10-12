@@ -26,7 +26,7 @@ export const listInventory = asyncHandler(async (req, res) => {
 
   const { data, error } = await supabaseAdmin
     .from('inventory').select(SELECT).order('inventory_id');
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
 
   let rows = data
     .filter((r) => r.product)
@@ -49,7 +49,7 @@ export const inventorySummary = asyncHandler(async (_req, res) => {
   const { data, error } = await supabaseAdmin
     .from('inventory')
     .select('current_stock, minimum_stock, reorder_point, product:products ( unit_price, status )');
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
 
   const rows = data.filter((r) => r.product);
   const summary = rows.reduce((acc, r) => {
@@ -64,7 +64,7 @@ export const inventorySummary = asyncHandler(async (_req, res) => {
   }, { totalProducts: 0, totalQuantity: 0, totalValue: 0, lowStock: 0, outOfStock: 0, reorderDue: 0 });
 
   const { count: activeAlerts } = await supabaseAdmin
-    .from('alerts').select('alert_id', { count: 'exact', head: true }).eq('alert_status', 'active');
+    .from('alerts').select('alert_id', { count: 'exact', head: true }).in('alert_status', ['active', 'acknowledged']);
 
   summary.totalValue = Number(summary.totalValue.toFixed(2));
   summary.activeAlerts = activeAlerts ?? 0;
@@ -94,7 +94,7 @@ export const updateThresholds = asyncHandler(async (req, res) => {
 
   const { data, error } = await supabaseAdmin
     .from('inventory').update(patch).eq('product_id', req.params.productId).select(SELECT).single();
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
   if (!data) throw ApiError.notFound('Inventory record not found');
 
   await refreshAlertsForProduct(Number(req.params.productId));

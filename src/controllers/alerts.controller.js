@@ -36,7 +36,7 @@ export const listAlerts = asyncHandler(async (req, res) => {
   if (priority) q = q.eq('priority', priority);
 
   const { data, error } = await q;
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
 
   let rows = data.map((a) => ({
     ...a,
@@ -60,7 +60,7 @@ export const listAlerts = asyncHandler(async (req, res) => {
 export const alertSummary = asyncHandler(async (_req, res) => {
   const { data, error } = await supabaseAdmin
     .from('alerts').select('alert_type, priority, alert_status').in('alert_status', OPEN_STATUSES);
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
 
   const byType = {}, byPriority = { low: 0, medium: 0, high: 0, critical: 0 };
   const byStatus = { active: 0, acknowledged: 0 };
@@ -119,7 +119,7 @@ export const updateAlertStatus = asyncHandler(async (req, res) => {
 
   const { data, error } = await supabaseAdmin
     .from('alerts').update(patch).eq('alert_id', req.params.id).select(SELECT).single();
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
   if (!data) throw ApiError.notFound('Alert not found');
 
   invalidateDashboardCache();

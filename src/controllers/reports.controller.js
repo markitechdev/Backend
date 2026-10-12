@@ -3,7 +3,7 @@ import { ApiError } from '../utils/ApiError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok, paginated } from '../utils/respond.js';
 import { logActivity } from '../services/activityLog.service.js';
-import { applyDateRange } from '../utils/query.js';
+import { fetchAllRows, applyDateRange } from '../utils/query.js';
 import { stockStatus } from '../utils/stock.js';
 
 const statusOf = stockStatus;
@@ -45,7 +45,7 @@ export const getInventorySummaryReport = asyncHandler(async (req, res) => {
     `)
     .order('inventory_id');
 
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
 
   let rows = (data || [])
     .filter((r) => r.product)
@@ -111,25 +111,27 @@ export const getInventorySummaryReport = asyncHandler(async (req, res) => {
 export const getStockMovementsReport = asyncHandler(async (req, res) => {
   const { from, to, type, productId, userId, search, page, limit } = req.query;
 
-  let q = supabaseAdmin
-    .from('stock_movements')
-    .select(`
-      movement_id, movement_type, quantity, reason, reference_no, date_recorded,
-      product:products (
-        product_id, product_name, sku, unit_price,
-        category:categories ( category_id, category_name )
-      ),
-      recorded_by_user:users!stock_movements_recorded_by_fkey ( user_id, full_name, username )
-    `)
-    .order('date_recorded', { ascending: false });
+  // Paged read: Supabase returns at most 1,000 rows per request
+  const build = () => {
+    let q = supabaseAdmin
+      .from('stock_movements')
+      .select(`
+        movement_id, movement_type, quantity, reason, reference_no, date_recorded,
+        product:products (
+          product_id, product_name, sku, unit_price,
+          category:categories ( category_id, category_name )
+        ),
+        recorded_by_user:users!stock_movements_recorded_by_fkey ( user_id, full_name, username )
+      `)
+      .order('date_recorded', { ascending: false });
 
-  q = applyDateRange(q, 'date_recorded', from, to);
-  if (type) q = q.eq('movement_type', type);
-  if (productId) q = q.eq('product_id', Number(productId));
-  if (userId)    q = q.eq('recorded_by', userId);
-
-  const { data, error } = await q;
-  if (error) throw new ApiError(500, error.message);
+    q = applyDateRange(q, 'date_recorded', from, to);
+    if (type) q = q.eq('movement_type', type);
+    if (productId) q = q.eq('product_id', Number(productId));
+    if (userId)    q = q.eq('recorded_by', userId);
+    return q.order('movement_id', { ascending: false });
+  };
+  const data = await fetchAllRows(build);
 
   let rows = (data || []).map((m) => {
     const unitPrice = Number(m.product?.unit_price || 0);
@@ -183,24 +185,26 @@ export const getStockMovementsReport = asyncHandler(async (req, res) => {
 export const getShrinkageReport = asyncHandler(async (req, res) => {
   const { from, to, productId, categoryId, page, limit } = req.query;
 
-  let q = supabaseAdmin
-    .from('stock_movements')
-    .select(`
-      movement_id, movement_type, quantity, reason, reference_no, date_recorded,
-      product:products (
-        product_id, product_name, sku, unit_price,
-        category:categories ( category_id, category_name )
-      ),
-      recorded_by_user:users!stock_movements_recorded_by_fkey ( user_id, full_name )
-    `)
-    .in('movement_type', ['damaged', 'missing'])
-    .order('date_recorded', { ascending: false });
+  // Paged read: Supabase returns at most 1,000 rows per request
+  const build = () => {
+    let q = supabaseAdmin
+      .from('stock_movements')
+      .select(`
+        movement_id, movement_type, quantity, reason, reference_no, date_recorded,
+        product:products (
+          product_id, product_name, sku, unit_price,
+          category:categories ( category_id, category_name )
+        ),
+        recorded_by_user:users!stock_movements_recorded_by_fkey ( user_id, full_name )
+      `)
+      .in('movement_type', ['damaged', 'missing'])
+      .order('date_recorded', { ascending: false });
 
-  q = applyDateRange(q, 'date_recorded', from, to);
-  if (productId) q = q.eq('product_id', Number(productId));
-
-  const { data, error } = await q;
-  if (error) throw new ApiError(500, error.message);
+    q = applyDateRange(q, 'date_recorded', from, to);
+    if (productId) q = q.eq('product_id', Number(productId));
+    return q.order('movement_id', { ascending: false });
+  };
+  const data = await fetchAllRows(build);
 
   let rows = (data || []).map((m) => {
     const qty = Math.abs(m.quantity);
@@ -270,7 +274,7 @@ export const getLowStockReport = asyncHandler(async (req, res) => {
     `)
     .order('current_stock', { ascending: true });
 
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
 
   let rows = (data || [])
     .filter((r) => r.product && r.current_stock > 0 && r.current_stock <= r.minimum_stock)
@@ -329,7 +333,7 @@ export const getOutOfStockReport = asyncHandler(async (req, res) => {
     `)
     .eq('current_stock', 0);
 
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
 
   let rows = (data || [])
     .filter((r) => r.product)
@@ -390,7 +394,7 @@ export const getReorderReport = asyncHandler(async (req, res) => {
     `)
     .order('current_stock', { ascending: true });
 
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
 
   let rows = (data || [])
     .filter((r) => r.product && r.current_stock <= r.reorder_point)
@@ -457,7 +461,7 @@ export const getSupplierSummaryReport = asyncHandler(async (req, res) => {
     `)
     .order('supplier_name');
 
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
 
   let rows = (suppliers || []).map((s) => {
     const prods = s.products || [];

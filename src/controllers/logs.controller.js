@@ -47,7 +47,7 @@ export const listLogs = asyncHandler(async (req, res) => {
   else if (!search) q = q.limit(1000);
 
   const { data, error, count } = await q;
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
 
   let rows = (data || []).map((l) => {
     const actorRole = l.user?.role;

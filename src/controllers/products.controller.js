@@ -55,7 +55,7 @@ export const listProducts = asyncHandler(async (req, res) => {
   if (search)     q = q.or(`product_name.ilike.%${search}%,sku.ilike.%${search}%`);
 
   const { data, error } = await q;
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
 
   let rows = data.map(decorate);
   if (wantedStockStatus) rows = rows.filter((r) => r.stock_status === wantedStockStatus);
@@ -76,7 +76,7 @@ export const listProducts = asyncHandler(async (req, res) => {
 export const getProduct = asyncHandler(async (req, res) => {
   const { data, error } = await supabaseAdmin
     .from('products').select(SELECT).eq('product_id', req.params.id).maybeSingle();
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
   if (!data) throw ApiError.notFound('Product not found');
 
   const { data: movements } = await supabaseAdmin
@@ -107,7 +107,7 @@ export const createProduct = asyncHandler(async (req, res) => {
 
   if (error) {
     if (error.code === '23505') throw ApiError.conflict(`SKU "${b.sku}" is already in use`);
-    throw new ApiError(500, error.message);
+    throw ApiError.fromDb(error);
   }
 
   const { error: invError } = await supabaseAdmin.from('inventory').insert({
@@ -120,7 +120,7 @@ export const createProduct = asyncHandler(async (req, res) => {
   });
   if (invError) {
     await supabaseAdmin.from('products').delete().eq('product_id', product.product_id);
-    throw new ApiError(500, invError.message);
+    throw ApiError.fromDb(invError);
   }
 
   // NOTE: the opening balance is set directly on the inventory row above.
@@ -164,7 +164,7 @@ export const updateProduct = asyncHandler(async (req, res) => {
       .from('products').update(productPatch).eq('product_id', req.params.id);
     if (error) {
       if (error.code === '23505') throw ApiError.conflict('That SKU is already in use');
-      throw new ApiError(500, error.message);
+      throw ApiError.fromDb(error);
     }
   }
 
@@ -178,7 +178,7 @@ export const updateProduct = asyncHandler(async (req, res) => {
     invPatch.updated_by = req.user.id;
     invPatch.last_updated = new Date().toISOString();
     const { error: invError } = await supabaseAdmin.from('inventory').update(invPatch).eq('product_id', req.params.id);
-    if (invError) throw new ApiError(500, invError.message);
+    if (invError) throw ApiError.fromDb(invError);
   }
 
   await refreshAlertsForProduct(Number(req.params.id));
@@ -205,12 +205,12 @@ export const deleteProduct = asyncHandler(async (req, res) => {
   const { count: movementCount, error: countError } = await supabaseAdmin
     .from('stock_movements').select('movement_id', { count: 'exact', head: true })
     .eq('product_id', req.params.id);
-  if (countError) throw new ApiError(500, countError.message);
+  if (countError) throw ApiError.fromDb(countError);
 
   if ((movementCount ?? 0) > 0) {
     const { error } = await supabaseAdmin
       .from('products').update({ status: 'discontinued' }).eq('product_id', req.params.id);
-    if (error) throw new ApiError(500, error.message);
+    if (error) throw ApiError.fromDb(error);
     invalidateDashboardCache();
     await logActivity(req.user.id, 'PRODUCT_ARCHIVED', 'products', req.params.id, {
       name: existing.product_name, movementCount,
@@ -223,7 +223,7 @@ export const deleteProduct = asyncHandler(async (req, res) => {
   }
 
   const { error } = await supabaseAdmin.from('products').delete().eq('product_id', req.params.id);
-  if (error) throw new ApiError(500, error.message);
+  if (error) throw ApiError.fromDb(error);
   invalidateDashboardCache();
   await logActivity(req.user.id, 'PRODUCT_DELETED', 'products', req.params.id, { name: existing.product_name });
   noContent(res);

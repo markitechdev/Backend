@@ -27,7 +27,7 @@ export const login = asyncHandler(async (req, res) => {
   const discardSession = async () => {
     revokeToken(data.session.access_token);
     revokeToken(data.session.refresh_token);
-    try { await supabaseAdmin.auth.admin.signOut(data.session.access_token); } catch { /* blacklist covers it */ }
+    try { await supabaseAdmin.auth.admin.signOut(data.session.access_token, 'local'); } catch { /* blacklist covers it */ }
   };
 
   let identity;
@@ -76,7 +76,7 @@ export const logout = asyncHandler(async (req, res) => {
   if (req.accessToken) {
     revokeToken(req.accessToken);
     try {
-      await supabaseAdmin.auth.admin.signOut(req.accessToken);
+      await supabaseAdmin.auth.admin.signOut(req.accessToken, 'local');
     } catch {
       // In-memory blacklist ensures immediate revocation
     }
