@@ -2,7 +2,7 @@
 
 ## 1. Supabase (database)
 In the Supabase SQL Editor run, in order, any file not yet applied:
-`01_schema.sql` → `02_functions.sql` → `03_rls.sql` → `04_seed.sql` → `05_fixes.sql` → `06_hardening.sql`
+`01_schema.sql` → `02_functions.sql` → `03_rls.sql` → `04_seed.sql` → `05_fixes.sql` → `06_hardening.sql` → `07_suppliers_unique.sql`
 (05 and 06 are safe to run again.) Then, once, from this folder: `npm run seed:users` (only for a fresh database).
 
 ## 2. Backend on Vercel (project from this repo)

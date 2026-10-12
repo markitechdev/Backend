@@ -98,24 +98,42 @@ insert into public.categories (category_name, description) values
 on conflict (category_name) do nothing;
 
 -- --------------------------------------------------------- SUPPLIERS
-insert into public.suppliers (supplier_name, contact_person, contact_number, email, address) values
+-- Only adds a supplier whose name is not there yet, so re-running this file
+-- never creates duplicates (see 07_suppliers_unique.sql).
+insert into public.suppliers (supplier_name, contact_person, contact_number, email, address)
+select v.supplier_name, v.contact_person, v.contact_number, v.email, v.address
+from (values
   ('TechSource Inc.',    'Maria Santos',  '+63 917 555 0101', 'sales@techsource.example',  'Makati City, Metro Manila'),
   ('CablePro Ltd.',      'Jun Reyes',     '+63 918 555 0102', 'orders@cablepro.example',   'Cabuyao, Laguna'),
   ('ErgoGear Co.',       'Ana Villanueva','+63 919 555 0103', 'hello@ergogear.example',    'Quezon City, Metro Manila'),
   ('KeyTech Solutions',  'Paolo Cruz',    '+63 920 555 0104', 'support@keytech.example',   'Sta. Rosa, Laguna'),
   ('VisionPro Ltd.',     'Grace Lim',     '+63 921 555 0105', 'contact@visionpro.example', 'Pasig City, Metro Manila')
-on conflict do nothing;
+) as v(supplier_name, contact_person, contact_number, email, address)
+where not exists (
+  select 1 from public.suppliers s where lower(btrim(s.supplier_name)) = lower(btrim(v.supplier_name))
+);
 
 -- ---------------------------------------------------------- PRODUCTS
-insert into public.products (product_name, sku, category_id, supplier_id, unit_price, expiration_date) values
-  ('Wireless Mouse',    'SKU-1001', 1, 1, 749.00,  null),
-  ('Keyboard',          'SKU-5002', 1, 4, 1250.00, null),
-  ('USB-C Cable',       'SKU-2040', 3, 2, 299.00,  null),
-  ('Laptop Stand',      'SKU-3015', 2, 3, 1599.00, null),
-  ('Monitor 24"',       'SKU-6021', 1, 5, 8499.00, null),
-  ('Wireless Headset',  'SKU-7003', 1, 1, 2199.00, null),
-  ('HDMI Adapter',      'SKU-8004', 2, 2, 549.00,  null),
-  ('Cleaning Solution', 'SKU-9005', 4, 3, 189.00,  current_date + interval '20 days')
+-- Category and supplier are looked up by name, so the seed does not depend
+-- on which id numbers the database happened to assign.
+insert into public.products (product_name, sku, category_id, supplier_id, unit_price, expiration_date)
+select v.product_name, v.sku, c.category_id, sp.supplier_id, v.unit_price, v.expiration_date
+from (values
+  ('Wireless Mouse',    'SKU-1001', 'Electronics', 'TechSource Inc.',   749.00,  null::date),
+  ('Keyboard',          'SKU-5002', 'Electronics', 'KeyTech Solutions', 1250.00, null),
+  ('USB-C Cable',       'SKU-2040', 'Cables',      'CablePro Ltd.',     299.00,  null),
+  ('Laptop Stand',      'SKU-3015', 'Accessories', 'ErgoGear Co.',      1599.00, null),
+  ('Monitor 24"',       'SKU-6021', 'Electronics', 'VisionPro Ltd.',    8499.00, null),
+  ('Wireless Headset',  'SKU-7003', 'Electronics', 'TechSource Inc.',   2199.00, null),
+  ('HDMI Adapter',      'SKU-8004', 'Accessories', 'CablePro Ltd.',     549.00,  null),
+  ('Cleaning Solution', 'SKU-9005', 'Consumables', 'ErgoGear Co.',      189.00,  (current_date + interval '20 days')::date)
+) as v(product_name, sku, category_name, supplier_name, unit_price, expiration_date)
+left join public.categories c on c.category_name = v.category_name
+left join lateral (
+  select s.supplier_id from public.suppliers s
+  where lower(btrim(s.supplier_name)) = lower(btrim(v.supplier_name))
+  order by s.supplier_id limit 1
+) sp on true
 on conflict (sku) do nothing;
 
 -- --------------------------------------------------------- INVENTORY
