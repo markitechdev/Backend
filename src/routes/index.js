@@ -12,6 +12,7 @@ import supplierRoutes from './suppliers.routes.js';
 import dashboardRoutes from './dashboard.routes.js';
 import logRoutes from './logs.routes.js';
 import reportRoutes from './reports.routes.js';
+import salesRoutes from './sales.routes.js';
 
 const router = Router();
 
@@ -36,5 +37,6 @@ router.use('/logs', logRoutes);
 router.use('/categories', categoryRoutes);
 router.use('/suppliers', supplierRoutes);
 router.use('/reports', reportRoutes);
+router.use('/sales', salesRoutes);
 
 export default router;

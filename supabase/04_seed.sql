@@ -77,7 +77,7 @@ from public.roles r join public.permissions p on p.permission_code in (
 where r.role_code = 'staff_admin'
 on conflict do nothing;
 
--- Finance Admin: sales/transactions, financial records and reports
+-- Finance Admin: sales/transactions (see 08_sales.sql), financial records and reports
 insert into public.role_permissions (role_id, permission_id)
 select r.role_id, p.permission_id
 from public.roles r join public.permissions p on p.permission_code in (

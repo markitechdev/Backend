@@ -2,8 +2,8 @@
 
 ## 1. Supabase (database)
 In the Supabase SQL Editor run, in order, any file not yet applied:
-`01_schema.sql` → `02_functions.sql` → `03_rls.sql` → `04_seed.sql` → `05_fixes.sql` → `06_hardening.sql` → `07_suppliers_unique.sql`
-(05 and 06 are safe to run again.) Then, once, from this folder: `npm run seed:users` (only for a fresh database).
+`01_schema.sql` → `02_functions.sql` → `03_rls.sql` → `04_seed.sql` → `05_fixes.sql` → `06_hardening.sql` → `07_suppliers_unique.sql` → `08_sales.sql`
+(05–08 are safe to run again; `updates_all_in_one.sql` applies 05–08 in one go on a database that already has 01–04.) Then, once, from this folder: `npm run seed:users` (only for a fresh database).
 
 ## 2. Backend on Vercel (project from this repo)
 - Framework preset: **Other**. Root directory: repo root. No build command needed.
@@ -28,3 +28,6 @@ In the Supabase SQL Editor run, in order, any file not yet applied:
 
 ## Known limits on serverless
 Token revocation, the login rate limit and the short caches live in memory per instance. A signed-out access token can stay valid on another instance until it expires (≤ 1 hour); Supabase still invalidates the refresh token immediately.
+
+## Sales & transactions (finals phase)
+`08_sales.sql` adds the `sales` and `sale_items` tables. Sales are written by the database function `record_sale`, which issues stock through `stock_movements` in the same transaction (so inventory and alerts stay in step), and `void_sale` returns the stock. API: `GET /api/sales`, `GET /api/sales/:id`, `GET /api/sales/summary?from&to`, `POST /api/sales`, `POST /api/sales/:id/void` — gated by `finance.view` / `finance.manage`.
